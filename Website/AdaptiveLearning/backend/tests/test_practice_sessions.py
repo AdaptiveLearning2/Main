@@ -367,9 +367,31 @@ def test_practice_questions_are_counted_served_and_failures_are_counted_not_made
         raise ValueError("Failed to generate valid JSON after retries")
 
     monkeypatch.setattr(main.LLM_topic_decider, "question_generation", _gave_up)
-    with pytest.raises(ValueError):
+    with pytest.raises(main.HTTPException) as exc:
         main.practice_question(SESSION, None)
-    assert ops_metrics.pending() == {("question", "generation_failed:ValueError"): 1}
+    assert exc.value.status_code == 503
+    assert ops_metrics.pending()[("question", "generation_failed:ValueError")] == 1
+
+
+def test_a_generator_that_gives_up_is_retried_inside_the_sessions_own_topics(_client, monkeypatch):
+    _as(monkeypatch, USER)
+    _client(sessions=[{**_OWNED_SESSION, "topics": ["ordering", "mean"]}])
+    monkeypatch.setattr(main, "_pick_practice_topic", lambda _s, _t: "ordering")
+    monkeypatch.setattr(main.LLM_topic_decider, "_attach_stored_id", lambda q, d: q)
+    asked = []
+
+    def _generate(topic, *_a):
+        asked.append(topic)
+        if len(asked) == 1:
+            raise ValueError("Failed to generate valid JSON after retries")
+        return {"question_text": "q", "question_topic": topic}
+
+    monkeypatch.setattr(main.LLM_topic_decider, "question_generation", _generate)
+
+    question = main.practice_question(SESSION, None)
+
+    assert asked == ["ordering", "mean"]
+    assert question["question_topic"] == "mean"
 
 
 def test_question_generates_from_the_sessions_own_settings_and_stores_it(_client, monkeypatch):

@@ -3615,11 +3615,12 @@ def generate_question(
                     print(f"[generate] refused for {user_id[:8]}: {e}")
                     raise HTTPException(503, "Question generation is temporarily unavailable.")
                 except Exception as e:
-                    # Re-raised as the 500 it always was; logged so the failure has a cause on record.
+                    # Logged so the failure has a cause on record.
                     print(f"[generate] failed for {user_id[:8]} at {effective_grade!r}, bias {manual_bias}: "
                           f"{type(e).__name__}: {e}")
                     _count_generation_failure(type(e).__name__)
-                    raise
+                    # 503, not 500: the generator and its fallback both gave up, and a retry may succeed.
+                    raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
             if not question:
                 print(f"[generate] the decider returned no question for {user_id[:8]} at {effective_grade!r}")
                 _count_generation_failure("NoQuestion")
@@ -3944,8 +3945,11 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
                     headers={"Retry-After": "5"},
                 )
             try:
-                question = LLM_topic_decider.question_generation(
-                    topic, session["difficulty"], user["id"], session.get("grade_level"))
+                # The student chose these topics: the second try stays inside them.
+                others = [t for t in session["topics"] if t != topic]
+                question = LLM_topic_decider.generate_with_fallback(
+                    topic, session["difficulty"], user["id"], session.get("grade_level"),
+                    [random.choice(others)] if others else [topic])
             except llm_client.GenerationUnavailable as e:
                 print(f"[practice] generation refused for {user['id'][:8]}: {e}")
                 raise HTTPException(503, "Question generation is temporarily unavailable.")
@@ -3953,7 +3957,7 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
                 print(f"[practice] generation failed for {user['id'][:8]} on {topic!r}: "
                       f"{type(e).__name__}: {e}")
                 _count_generation_failure(type(e).__name__)
-                raise
+                raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
         if not question:
             _count_generation_failure("NoQuestion")
             raise HTTPException(500, "Failed to generate question")

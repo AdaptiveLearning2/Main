@@ -314,10 +314,13 @@ def test_a_generator_that_raised_is_counted_as_a_question_not_made(monkeypatch):
     def _gave_up(*_a, **_k):
         raise ValueError("Failed to generate valid JSON after retries")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(HTTPException) as exc:
         _generate(monkeypatch, decider=_gave_up)
-    with pytest.raises(HTTPException):
+    # Both the generator and its fallback gave up: a retryable 503, with no Retry-After (a retry is costly).
+    assert exc.value.status_code == 503 and not exc.value.headers
+    with pytest.raises(HTTPException) as exc:
         _generate(monkeypatch, decider=lambda *_a, **_k: None)
+    assert exc.value.status_code == 500
 
     assert ops_metrics.pending() == {("question", "generation_failed:ValueError"): 1,
                                      ("question", "generation_failed:NoQuestion"): 1}
@@ -632,8 +635,9 @@ def test_a_decider_that_raises_is_logged_with_its_cause_and_still_fails(monkeypa
     def _crash(*_a, **_k):
         raise ValueError("no solver for this topic")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(HTTPException) as exc:
         _generate(monkeypatch, decider=_crash)
+    assert exc.value.status_code == 503
     log = capsys.readouterr().out
     assert "[generate] failed for kid" in log and "ValueError: no solver for this topic" in log, log
 

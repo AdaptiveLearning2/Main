@@ -3,6 +3,7 @@ from supabase_client import get_client
 from postgrest.types import ReturnMethod
 from dotenv import load_dotenv
 import llm_client
+import ops_metrics
 from llm_json import extract_json
 import json
 import random
@@ -710,6 +711,28 @@ def question_generation(topic, difficulty, user_id, grade):
             raise ValueError(f"no generator wired for topic {topic!r}")
     return response
 
+
+def generate_with_fallback(topic, difficulty, user_id, grade, alternatives):
+    """`question_generation`, then one try at the first of `alternatives` if the generator gives up.
+
+    A refused request (`GenerationUnavailable`) is never retried. A question made from another topic
+    carries `fallback_from`; the last failure is re-raised.
+    """
+    try:
+        return question_generation(topic, difficulty, user_id, grade)
+    except llm_client.GenerationUnavailable:
+        raise
+    except Exception as e:                                     # noqa: BLE001
+        if not alternatives:
+            raise
+        print(f"[generate] {topic!r} failed ({type(e).__name__}: {e}); trying {alternatives[0]!r}")
+        ops_metrics.bump("question", "generation_fallback")
+    question = question_generation(alternatives[0], difficulty, user_id, grade)
+    if alternatives[0] != topic:
+        question["fallback_from"] = topic
+    return question
+
+
 def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=None, manual_bias=0):
     # `grade` is caller text headed for the prompt; canonicalise it as question_generation does.
     grade = grade_levels.grade_for_prompt(grade)
@@ -827,7 +850,9 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     if effective_bias:
         difficulty = _shift_difficulty(difficulty, effective_bias)
 
-    question = question_generation(topic, difficulty, user_id, grade)
+    others = [t for t in _allowed_topics(grade) if t != topic]
+    question = generate_with_fallback(
+        topic, difficulty, user_id, grade, [random.choice(others)] if others else [topic])
     print(question)
 
     _attach_stored_id(question, difficulty)

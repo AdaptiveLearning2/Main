@@ -4772,8 +4772,9 @@ def _subject_names_a_cause(subject: str, bare: bool) -> bool:
 
 
 # "Stopped giving us data" reads as a fault, unless "turned off" or "paused" comes first in the same sentence:
-# then it is the consequence of a stated cause. Sentences end at . ! ? only, so a ";" keeps the cause attached.
-_FULL_STOP = re.compile(r"[.!?\n]")
+# then it is the consequence of a stated cause. A sentence ends at . ! ? before a capital (so "3 Oct." does
+# not end one) or a newline; a ";" keeps the cause attached.
+_FULL_STOP = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"“'‘])|\n")
 _STOPPED_SENDING = re.compile(
     r"\b(?:stopped|stops|ceased|no\s+longer)\s+(?:giv|send|provid|suppl|report|collect)\w*"
     r"(?:\s+us|\s+the\s+(?:app|system))?\s+(?:any\s+|more\s+|new\s+)?(?:data|readings?|figures|signals?)\b",

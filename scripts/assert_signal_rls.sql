@@ -2453,7 +2453,9 @@ BEGIN
         (psess, pusr, true, '2099-01-02T12:01:00Z'), (psess, pusr, NULL, '2099-01-02T12:02:00Z');
 
     got := public.admin_today('2099-01-02T00:00:00Z');
-    IF (got->>'practice_answers')::int <> 1 OR (got->>'active_students')::int <> 2 THEN
+    -- IS DISTINCT FROM: a function without the key gives NULL, which `<>` lets through.
+    IF (got->>'practice_answers')::int IS DISTINCT FROM 1
+       OR (got->>'active_students')::int IS DISTINCT FROM 2 THEN
         RAISE EXCEPTION 'admin_today ignored practice: %', got;
     END IF;
     IF (got->>'started')::int <> 3 OR (got->>'answers')::int <> 2 OR (got->>'active_students')::int <> 2

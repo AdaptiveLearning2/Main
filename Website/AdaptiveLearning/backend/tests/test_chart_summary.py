@@ -542,13 +542,14 @@ _AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readi
 
 @pytest.mark.parametrize("line", [
     "Body arousal measures how often the heart rate was at least 10 beats a minute higher, at 0%.",
+    "Body arousal -- the heart rate was often at least 10 beats a minute above the start -- was 0%.",
     "Body arousal -- the share of the time the heart rate was 10 beats a minute up -- was 0%.",
     "Body arousal -- 0% of the lesson spent at least 10 beats a minute above the start.",
     "Body arousal -- 0% of the lesson was at least 10 beats a minute above the start.",
     "Body arousal -- 0 percent of the time was at least 10 beats a minute above the start.",
     "Body arousal -- 0% of time spent at least 10 beats a minute above the start.",
     "Body arousal -- 0%, the lesson spent well above 10 beats a minute over the start.",
-], ids=["how-often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
+], ids=["how-often", "often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
         "time-spent", "spent-above"])
 def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     """It is a share of readings; a time-share reading is the claim the glossary removed."""

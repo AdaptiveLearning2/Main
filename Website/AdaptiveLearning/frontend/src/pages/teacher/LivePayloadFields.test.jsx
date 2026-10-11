@@ -80,7 +80,7 @@ it('reads nothing from a live payload that latest_signals_for_sessions does not 
   render(<MemoryRouter><Live /></MemoryRouter>)
   // Each card's last section is on screen, so every read path has run.
   await screen.findByText(/72 bpm/)
-  await screen.findByText(/HRV 40 ms/)
+  await screen.findByText(/Heart-rate variability 40 ms/)
   await screen.findByText('happy')
   expect(await screen.findAllByText(/weak signal/)).toHaveLength(3)
 

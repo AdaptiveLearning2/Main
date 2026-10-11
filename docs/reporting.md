@@ -420,7 +420,8 @@ CHECK makes it near-impossible, and if it happens a visible row is what gets it 
 
 At every session close, `chart_archive.schedule()` renders the session's four charts to standalone SVG
 (`chart_render.py`) and uploads them to the private `session-charts` bucket. With the rollup, these are what is
-left of a school year once `expire_signal_rows` has run.
+left of a school year once `expire_signal_rows` has run. **The cognitive archive draws EEG stress, not calm**, as every
+stored one does (`ARCHIVE_ONLY_SERIES`); the app draws calm, and `test_chart_render.py` holds the two palettes apart.
 
 **Off the request path, and it never raises.** A storage failure must not cost a student their session close — the
 session row, their stats and the rollup are all written by then. So the work goes to a two-worker pool and
@@ -582,7 +583,8 @@ in one step — several tests started actually attempting the model call, one vi
 limiting pins it off, even where the assertion happened to pass either way.
 
 Model output is untrusted text: parsed, length-bounded, stripped of markdown emphasis and list markers, and run
-through a clinical-term filter, with anything failing validation falling back to the rules. Extend
+through a clinical-term filter and a "stress" filter (calm is not a stress measure, the same `_STRESS_WORD` the
+chart summary uses), with anything failing validation falling back to the rules. Extend
 `_validated_strategies` rather than rendering raw output.
 
 **The panel is on the teacher report as well as the parent one, and the copy is the only thing that differs.** The
@@ -594,8 +596,8 @@ says *"you are helping a parent support their child's maths practice at home"* a
 been asked for something it was not.
 
 On the teacher page it is **behind "Hide sensor data" with the charts**, because the advice *is* sensor data in
-prose — the rule-based list says *"stress indicators ran high this week"*, and the model pass is handed the same
-averages. The whole panel goes rather than its individual lines: the advice mixes topic accuracy with signal
+prose — the rule-based list says *"calm readings ran low this week"*, and the model pass is handed the same
+averages (calm, as the tiles show it, never "stress"). The whole panel goes rather than its individual lines: the advice mixes topic accuracy with signal
 readings and nothing downstream can separate them, and asking the endpoint for a signal-free list would change the
 advice rather than hide it. **Assert on the Generate button's absence, not the heading** — hiding a heading over a
 live button satisfies a heading check and none of the point.

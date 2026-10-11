@@ -4830,11 +4830,12 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
             "problem out loud, which shows where their understanding actually stops."
         )
 
+    # Stored stress is `1 - calm`, so stress >= 0.65 is calm <= 35%; named as the page shows it.
     stress = averages.get("stress")
     if stress is not None and float(stress) >= 0.65:
         strategies.append(
             "Break practice into shorter blocks with a two-minute pause between "
-            "them -- stress indicators ran high this week."
+            "them -- calm readings ran low this week."
         )
     else:
         strategies.append(
@@ -4879,12 +4880,14 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         "You are helping a parent support their child's maths practice at home.\n"
         "Use only the weekly summary below. These are classroom learning "
         "indicators, not medical measurements -- do not diagnose, do not name any "
-        "condition, and do not give medical advice.\n"
+        "condition, and do not give medical advice. Never use the word stress or "
+        "stressed: calm is a relaxation reading, not a stress measure.\n"
         f"Return exactly {_STRATEGY_COUNT} short, practical, at-home strategies as "
         "a numbered list. One sentence each, no preamble.\n\n"
         f"Weekly summary (last {report.get('days', 7)} days):\n"
         f"- average focus {_pct(averages.get('focus'))}\n"
-        f"- average stress {_pct(averages.get('stress'))}\n"
+        # Calm, as the report shows it: the stored `stress` is `1 - calm`, not a stress measure.
+        f"- average calm (headband relaxation reading) {_pct(_calm_of(averages.get('stress')))}\n"
         # No engagement line: it is the focus index under another name
         # (signal_mapping.py), and restated it reads as a second fact.
         f"- weakest attempted topic: {topic_line}\n"
@@ -4916,6 +4919,9 @@ def _validated_strategies(raw: str) -> list[str] | None:
     """
     # The whole raw reply: a clinical term in a preamble rejects it too.
     if _CLINICAL_TERMS.search(raw or ""):
+        return None
+    # Calm is not a stress measure, and the rule-based list never says "stress" (CLAUDE.md).
+    if _STRESS_WORD.search(raw or ""):
         return None
     lines = _parse_strategy_lines(raw)
     if len(lines) < 3:

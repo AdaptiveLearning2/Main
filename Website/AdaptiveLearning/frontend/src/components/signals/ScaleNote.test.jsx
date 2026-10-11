@@ -27,9 +27,11 @@ describe('ScaleNote', () => {
     expect(isMixedScale(combineScales([{ score_scale: { min: 2, max: 2 } }]))).toBe(false)
   })
 
-  it('names a version step for differing ends and a stress-only split for two calm sources', () => {
+  it('names a version step for differing ends and a calm-only split for two calm sources', () => {
     const { rerender } = render(<ScaleNote scale={{ min: 1, max: 2 }} what="These" />)
-    expect(screen.getByRole('note')).toHaveTextContent(/focus and stress scores/)
+    expect(screen.getByRole('note')).toHaveTextContent(/focus and calm scores/)
+    // Named as the page shows it: the stored stress is drawn as calm.
+    expect(screen.getByRole('note')).not.toHaveTextContent(/stress/)
     expect(screen.getByRole('note')).toHaveTextContent(/before and after/)
     // The local calm moves stress, not focus, and runs beside the sdk calm on one version.
     const both = ['local', 'sdk']
@@ -38,8 +40,9 @@ describe('ScaleNote', () => {
     expect(screen.getByRole('note')).not.toHaveTextContent(/before and after/)
     expect(screen.getByRole('note')).toHaveTextContent(/two different ways/)
     expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    expect(screen.getByRole('note')).not.toHaveTextContent(/stress/)
     rerender(<ScaleNote scale={{ min: 1, max: 2, calm_sources: both }} what="These" />)
-    expect(screen.getByRole('note')).toHaveTextContent(/focus and stress scores/)
+    expect(screen.getByRole('note')).toHaveTextContent(/focus and calm scores/)
     expect(screen.getByRole('note')).toHaveTextContent(/two different ways/)
     rerender(<ScaleNote scale={{ min: 2, max: 2, calm_sources: ['local'] }} what="These" />)
     expect(screen.queryByRole('note')).not.toBeInTheDocument()

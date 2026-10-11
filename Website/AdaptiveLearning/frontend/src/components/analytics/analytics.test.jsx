@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
 import Heatmap from '../charts/Heatmap'
 import Panel from './Panel'
@@ -438,6 +438,20 @@ describe('ClassSignalTrend', () => {
     expect(summary).not.toMatch(/Focus 0% to 1%/)
   })
 
+  it('draws calm the right way up, never "Stress", and leaves a missing day as a gap', () => {
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30, timezone: 'UTC',
+      series: [day('2026-06-10'), day('2026-06-11', { avg_stress: null })],
+    }} />)
+    const table = screen.getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Calm' })).toBeInTheDocument()
+    // Stress 0.3 is calm 70%; a null stays a gap, never 100%.
+    expect(within(within(table).getByRole('row', { name: /06-10/ })).getByText('70%')).toBeInTheDocument()
+    expect(within(within(table).getByRole('row', { name: /06-11/ })).getByText('not recorded'))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+  })
+
   it('gives the table no heart column when no line is drawn for one', () => {
     // Asserted on the table: `describeSeries` drops an empty series from the sentence on its own.
     render(<ClassSignalTrend data={{
@@ -453,8 +467,20 @@ describe('ClassSignalTrend', () => {
       retrieved: true, days: 30,
       series: [day('2026-06-10'), heart('2026-06-10', 72)],
     }} />)
-    const summary = screen.getByRole('img').getAttribute('aria-label')
+    const summary = screen.getByRole('img', { name: /^class heart rate/i }).getAttribute('aria-label')
     expect(summary).toMatch(/Heart rate 72 bpm/)
+  })
+
+  it('draws heart rate on its own chart, never on a second axis beside percent', () => {
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30,
+      series: [day('2026-06-10'), heart('2026-06-10', 72)],
+    }} />)
+    const pct = screen.getByRole('table', { name: /^class focus and calm/i })
+    const bpm = screen.getByRole('table', { name: /^class heart rate/i })
+    const headers = t => within(t).getAllByRole('columnheader').map(h => h.textContent).slice(1)
+    expect(headers(pct)).toEqual(['Focus', 'Calm'])
+    expect(headers(bpm)).toEqual(['Heart rate'])
   })
 
   it('folds the channels of one day into one row rather than one row each', () => {
@@ -462,9 +488,11 @@ describe('ClassSignalTrend', () => {
       retrieved: true, days: 30,
       series: [day('2026-06-10'), heart('2026-06-10', 72)],
     }} />)
-    // One day, so both series report a single value rather than a range.
-    const summary = screen.getByRole('img').getAttribute('aria-label')
-    expect(summary).toMatch(/1 day with recordings/)
+    // One day, so both charts report a single value rather than a range.
+    for (const img of screen.getAllByRole('img')) {
+      expect(img.getAttribute('aria-label')).toMatch(/1 day with recordings/)
+    }
+    expect(screen.getAllByRole('img')).toHaveLength(2)
   })
 
   it('hides every series when the teacher has hidden sensor data, not just heart', () => {
@@ -489,6 +517,17 @@ describe('ClassSignalRoster', () => {
       cognitive_samples: 100, heart_samples: 50,
       eeg_enabled: true, heart_included: true, consent_retrieved: true, ...over,
     },
+  })
+
+  it('shows each student\'s calm the right way up, under a Calm column', () => {
+    render(<ClassSignalRoster data={{
+      retrieved: true, summaries_retrieved: true, days: 30, class_size: 5, min_students: 5,
+      per_student: [student('a'), student('b', { stress: 0.25 })],
+    }} />)
+    expect(screen.getByRole('columnheader', { name: 'Calm' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /stress/i })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: /^A/ })).getByText('70%')).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: /^B/ })).getByText('75%')).toBeInTheDocument()
   })
 
   it('explains a withheld breakdown rather than rendering a blank', () => {
@@ -687,7 +726,7 @@ describe('the score-scale caption on the class panels', () => {
   })
 
   it('captions a roster where one student is on the local calm beside sdk classmates', () => {
-    // One version, two calm sources: stress is in two units; the caption names stress only.
+    // One version, two calm sources: calm is in two units; the caption names calm only.
     const student = (id, score_scale) => ({
       student_id: id, display_name: id,
       summary: { focus: 0.6, stress: 0.3, cognitive_samples: 10, days_recorded: 2,

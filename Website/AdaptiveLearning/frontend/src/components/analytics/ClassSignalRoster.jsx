@@ -1,4 +1,5 @@
-import { offLabel, pct } from '../../lib/signalFormat'
+import { calmPct, offLabel, pct } from '../../lib/signalFormat'
+import { MEASURES } from '../../lib/signalGlossary'
 import Panel from './Panel'
 import ScaleNote from '../signals/ScaleNote'
 import { combineScales } from '../../lib/scoreScale'
@@ -98,7 +99,7 @@ export default function ClassSignalRoster({ data, loading, onRetry, hideSensors 
             <tr className="text-left text-gray-600 dark:text-gray-400">
               <th scope="col" className="py-2 pr-4 font-semibold">Student</th>
               <th scope="col" className="py-2 pr-4 font-semibold">Focus</th>
-              <th scope="col" className="py-2 pr-4 font-semibold">Stress</th>
+              <th scope="col" className="py-2 pr-4 font-semibold">{MEASURES.calm.name}</th>
               <th scope="col" className="py-2 pr-4 font-semibold">Heart rate</th>
               {/* Days, not sessions: same rollup rows as the averages, same lifetime. */}
               <th scope="col" className="py-2 font-semibold">Days</th>
@@ -127,7 +128,7 @@ export default function ClassSignalRoster({ data, loading, onRetry, hideSensors 
                     {typeof s.focus === 'number' ? pct(s.focus) : cellLabel(s, why.eeg)}
                   </td>
                   <td className="py-2 pr-4 text-gray-900 dark:text-white">
-                    {typeof s.stress === 'number' ? pct(s.stress) : cellLabel(s, why.eeg)}
+                    {typeof s.stress === 'number' ? calmPct(s.stress) : cellLabel(s, why.eeg)}
                   </td>
                   <td className="py-2 pr-4 text-gray-900 dark:text-white">
                     {typeof s.heart_rate_bpm === 'number'

@@ -31,9 +31,12 @@ STRESS_COLOURS = {
 SERIES_COLOURS = {
     "focus": "#6366f1",
     "stress": "#f43f5e",
+    "calm": "#0d9488",
     "heart_rate_bpm": "#a855f7",
     "rmssd_ms": "#f59e0b",
 }
+# Drawn only by archives: stored SVGs show EEG stress, the app shows it as calm.
+ARCHIVE_ONLY_SERIES = {"stress"}
 
 # Grey for a label with no fixed colour, so it never borrows a known one's identity.
 UNKNOWN_COLOUR = "#cbd5e1"

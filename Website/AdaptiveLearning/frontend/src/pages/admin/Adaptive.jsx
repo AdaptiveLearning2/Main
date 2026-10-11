@@ -6,7 +6,8 @@ const POLL_MS = 5 * 60_000
 
 // LLM_topic_decider.BIAS_WHYS, in words.
 const WHYS = {
-  stressed: 'Eased: a sensor read stress',
+  // Fusion's `stressed`: EEG calm below its line, or heart rate raised (signal_fusion.py).
+  stressed: 'Eased: low calm or a raised heart rate',
   manual: 'Set by the student (Easier / Harder)',
   facial_veto: 'Held: the camera withheld an increase',
   recent_misses: 'Held: recent misses',

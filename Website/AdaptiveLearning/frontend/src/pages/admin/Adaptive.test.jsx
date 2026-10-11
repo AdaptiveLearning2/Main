@@ -21,6 +21,9 @@ describe('adaptive decisions', () => {
     expect(reasons[0]).toBe('30 × Held: nothing to act on')
     expect(reasons).toContain('14 × Raised: a run of correct answers')
     expect(row).not.toHaveTextContent(/nothing_to_act_on|correct_run/)
+    // Fusion's internal `stressed` label reaches the page as what it measured, never as "stress".
+    expect(reasons).toContain('6 × Eased: low calm or a raised heart rate')
+    expect(row).not.toHaveTextContent(/stress/i)
     expect(apiFetch).toHaveBeenCalledWith(ADAPTIVE_PATH)
   })
 

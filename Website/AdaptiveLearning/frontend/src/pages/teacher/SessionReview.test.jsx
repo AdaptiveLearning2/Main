@@ -26,11 +26,11 @@ beforeEach(() => {
 
 // jsdom renders recharts at 0x0 with no internals, so only the page's own JSX text is checkable.
 describe('the two stress figures', () => {
-  it('titles the heart-derived pie distinctly, never bare "Stress"', async () => {
+  it('names the heart pie Body arousal and draws the EEG score as calm, never "Stress"', async () => {
     apiFetch.mockResolvedValue({
       cognitive: [
-        { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.5, stress: 0.4 },
-        { ts: '2026-08-10T09:01:00Z', focus: 0.6, engagement: 0.5, stress: 0.4 },
+        { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.5, stress: 0.25 },
+        { ts: '2026-08-10T09:01:00Z', focus: 0.6, engagement: 0.5, stress: 0.25 },
       ],
       face: [],
       heart: [{ ts: '2026-08-10T09:00:30Z', stress_category: 'low' }],
@@ -38,8 +38,14 @@ describe('the two stress figures', () => {
     })
     renderAt()
 
-    await waitFor(() => expect(screen.getByText('Heart-rate stress')).toBeInTheDocument())
-    expect(screen.queryByText('Stress')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Body arousal (heart rate)' }))
+      .toBeInTheDocument())
+    expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+    // Stress 0.25 is calm 75%; no other series reads 75% or 25%.
+    const replay = screen.getByRole('table', { name: /session replay: focus and calm/i })
+    expect(within(replay).getByRole('columnheader', { name: 'Calm' })).toBeInTheDocument()
+    expect(within(replay).getAllByText('75%').length).toBeGreaterThan(0)
+    expect(within(replay).queryByText('25%')).not.toBeInTheDocument()
   })
 })
 
@@ -83,11 +89,16 @@ describe('the archived-chart fallback', () => {
     renderAt()
 
     await waitFor(() =>
-      expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
-    expect(screen.getByAltText('Heart rate and HRV')).toBeInTheDocument()
+      expect(screen.getByAltText('Focus and EEG stress')).toBeInTheDocument())
+    // A stored archive still draws stress, so the page says what its red line is.
+    // Named by the legend's word, not by colour alone.
+    expect(screen.getByText(/the line its legend calls “stress” is EEG stress, the inverse of calm/))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/red line/)).not.toBeInTheDocument()
+    expect(screen.getByAltText('Heart rate and heart-rate variability')).toBeInTheDocument()
     expect(screen.getByAltText('Emotion mix')).toBeInTheDocument()
     // Null means that channel drew nothing.
-    expect(screen.queryByAltText('Autonomic arousal')).not.toBeInTheDocument()
+    expect(screen.queryByAltText('Body arousal (heart rate)')).not.toBeInTheDocument()
     expect(screen.getByText(/per-sample rows for this session have expired/i))
       .toBeInTheDocument()
   })
@@ -101,7 +112,7 @@ describe('the archived-chart fallback', () => {
     renderAt()
 
     await waitFor(() =>
-      expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
+      expect(screen.getByAltText('Focus and EEG stress')).toBeInTheDocument())
     expect(screen.queryByText(/once a sensor starts streaming/i))
       .not.toBeInTheDocument()
   })
@@ -194,7 +205,7 @@ describe('a fault is never reported as an absence', () => {
     renderAt()
 
     await waitFor(() =>
-      expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
+      expect(screen.getByAltText('Focus and EEG stress')).toBeInTheDocument())
     expect(screen.getByText(/one archived chart for this session could not be loaded/i))
       .toBeInTheDocument()
   })
@@ -212,7 +223,8 @@ describe('a fault is never reported as an absence', () => {
     mockPair({ archived: true, charts: { emotion_pie: null }, unavailable: ['stress_pie'] })
     renderAt()
 
-    await waitFor(() => expect(screen.getByText('Heart-rate stress')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Body arousal (heart rate)' }))
+      .toBeInTheDocument())
     expect(screen.getAllByText(/could not be loaded/i).length).toBeGreaterThan(0)
   })
 })
@@ -431,14 +443,31 @@ describe('choosing which measurements the timeline draws', () => {
     }],
   }
 
-  it('hides RMSSD on its own, leaving heart rate drawn', async () => {
+  it('draws one chart per unit, never percent beside bpm or ms', async () => {
     apiFetch.mockResolvedValue(WITH_HEART)
     renderAt()
-    await waitFor(() => expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument())
+    const pctTable = await screen.findByRole('table', { name: /session replay: focus and calm/i })
+    const bpm = screen.getByRole('table', { name: /session replay: heart rate over/i })
+    const ms = screen.getByRole('table', { name: /session replay: heart-rate variability/i })
+    const headers = t => within(t).getAllByRole('columnheader').map(h => h.textContent).slice(1)
+    expect(headers(pctTable)).toEqual(['Focus', 'Calm'])
+    expect(headers(bpm)).toEqual(['Heart rate'])
+    expect(headers(ms)).toEqual(['Heart-rate variability'])
 
-    await userEvent.click(screen.getByRole('switch', { name: /rmssd/i }))
+    // Hiding a chart's only series unmounts that chart, not its neighbours.
+    await userEvent.click(screen.getByRole('switch', { name: /heart-rate variability/i }))
+    expect(screen.queryByRole('table', { name: /session replay: heart-rate variability/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('table', { name: /session replay: heart rate over/i })).toBeInTheDocument()
+  })
 
-    expect(screen.queryByRole('columnheader', { name: /rmssd/i })).not.toBeInTheDocument()
+  it('hides heart-rate variability on its own, leaving heart rate drawn', async () => {
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: /heart-rate variability/i })).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('switch', { name: /heart-rate variability/i }))
+
+    expect(screen.queryByRole('columnheader', { name: /heart-rate variability/i })).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument()
   })
@@ -448,7 +477,7 @@ describe('choosing which measurements the timeline draws', () => {
     renderAt()
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
 
-    expect(screen.queryByRole('switch', { name: /rmssd/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /heart-rate variability/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('switch', { name: /heart rate/i })).not.toBeInTheDocument()
   })
 
@@ -457,7 +486,7 @@ describe('choosing which measurements the timeline draws', () => {
     renderAt()
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
 
-    for (const name of [/^focus$/i, /eeg stress/i, /heart rate/i, /rmssd/i]) {
+    for (const name of [/^focus$/i, /^calm$/i, /heart rate/i, /heart-rate variability/i]) {
       await userEvent.click(screen.getByRole('switch', { name }))
     }
 
@@ -465,17 +494,17 @@ describe('choosing which measurements the timeline draws', () => {
     expect(screen.queryByRole('table', { name: /session replay/i })).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /show all/i }))
-    expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /heart-rate variability/i })).toBeInTheDocument()
   })
 
   it('takes the answer-marker legend away with the markers themselves', async () => {
-    // Markers use the ratio axis, so they go with Focus and EEG stress even while heart rate is drawn.
+    // Markers use the ratio axis, so they go with Focus and Calm even while heart rate is drawn.
     apiFetch.mockResolvedValue(WITH_HEART)
     renderAt()
     await waitFor(() => expect(screen.getByText(/vertical lines = answer events/i)).toBeInTheDocument())
 
     await userEvent.click(screen.getByRole('switch', { name: /^focus$/i }))
-    await userEvent.click(screen.getByRole('switch', { name: /eeg stress/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /^calm$/i }))
 
     // Heart rate keeps the chart up, so this is not the empty-selection path.
     expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()

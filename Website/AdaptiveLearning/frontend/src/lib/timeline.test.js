@@ -5,7 +5,7 @@ import { downsample } from './timeline'
 function session() {
   const rows = []
   for (let i = 0; i < 14_400; i++) {
-    rows.push({ t: i * 250, focus: 0.5 + 0.1 * Math.sin(i / 50), stress: 0.3 })
+    rows.push({ t: i * 250, focus: 0.5 + 0.1 * Math.sin(i / 50), calm: 0.7 })
   }
   rows[3000].focus = 0.99                               // a spike the chart must still show
   rows[9000].focus = 0.01
@@ -47,7 +47,7 @@ it('holds the budget when every row carries a heart reading, and still draws hea
 
 it('always keeps the last row, so the line reaches the end of the session', () => {
   // Flat series: no extreme lands on the last row, so only an explicit rule keeps it.
-  const rows = Array.from({ length: 14_400 }, (_, i) => ({ t: i * 250, focus: 0.5, stress: 0.3 }))
+  const rows = Array.from({ length: 14_400 }, (_, i) => ({ t: i * 250, focus: 0.5, calm: 0.7 }))
   const out = downsample(rows, 1500)
   expect(out.at(-1)).toBe(rows.at(-1))
   expect(out[0]).toBe(rows[0])

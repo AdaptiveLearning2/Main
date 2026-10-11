@@ -11,8 +11,8 @@ export default function ScaleNote({ scale, what = 'These figures' }) {
       + ' so values from before and after it are not comparable')
   }
   if (change.sourceSplit) {
-    parts.push(`${change.versionStep ? 'and they ' : ''}mix stress scores from headbands`
-      + ' scoring calm two different ways, so those stress values are not comparable'
+    parts.push(`${change.versionStep ? 'and they ' : ''}mix calm scores from headbands`
+      + ' scoring calm two different ways, so those calm values are not comparable'
       + ' with each other')
   }
   return (

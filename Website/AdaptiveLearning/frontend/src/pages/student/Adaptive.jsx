@@ -1518,7 +1518,7 @@ export default function Adaptive() {
     stale: 'Connected, but no readings have been saved recently, so your teacher cannot see them live.',
     elsewhere: 'Connected. Your readings go to the lesson in another tab or window.',
   }[eegState]
-    || `${headbandSamples} samples sent · teacher can see your focus & stress live`
+    || `${headbandSamples} samples sent · teacher can see your focus & calm live`
 
   const activeClass = classes.find(c => c.id === classId)
   // The grade the backend serves: '' is none set anywhere, so its default; undefined is not
@@ -2233,10 +2233,7 @@ export default function Adaptive() {
                         <p className="text-gray-400 mb-1">Signal quality score <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
                         {bar(untrusted ? null : feat.confidence, 'bg-violet-500')}
                       </div>
-                      <div>
-                        <p className="text-gray-400 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && !untrusted ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
-                        {bar(feat.calm_score != null && !untrusted ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
-                      </div>
+                      {/* No "stress" tile: it is calm inverted, already shown above. */}
                     </div>
 
                     {/* Row 3 — bands */}

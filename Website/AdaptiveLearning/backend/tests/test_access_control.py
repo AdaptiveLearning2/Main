@@ -1921,6 +1921,25 @@ def test_rule_based_strategies_react_to_elevated_stress():
     calm = main._rule_based_strategies({"averages": {"stress": 0.2, "focus": 0.7}}, [])
     assert any("shorter blocks" in s for s in high)
     assert not any("shorter blocks" in s for s in calm)
+    # Named as the report's tiles name it: calm, never "stress".
+    assert any("calm readings ran low" in s for s in high)
+    assert not any("stress" in s.lower() for s in high + calm)
+
+
+def test_the_model_is_told_average_calm_never_average_stress():
+    report = {"days": 7, "averages": {"focus": 0.6, "stress": 0.25}, "sample_counts": {"sessions": 3}}
+    prompt = main._strategy_prompt(report, [], ["baseline"])
+    assert "average calm (headband relaxation reading) 75%" in prompt
+    # "stress" appears only in the instruction never to use it.
+    assert "average stress" not in prompt.lower()
+    assert "Never use the word stress or stressed" in prompt
+    mentions = [line for line in prompt.splitlines() if "stress" in line.lower()]
+    assert all("never use the word stress" in line.lower() or "not a stress measure" in line
+               for line in mentions), mentions
+    assert "25%" not in prompt
+
+    unread = main._strategy_prompt({"days": 7, "averages": {"focus": 0.6}}, [], ["baseline"])
+    assert "average calm (headband relaxation reading) unavailable" in unread
 
 
 def test_no_strategy_is_derived_from_face_attention():
@@ -1944,7 +1963,8 @@ def test_the_model_is_never_told_about_attention():
 
     assert "attention" not in prompt.lower()
     assert "83%" not in prompt, "the attention average reached the model"
-    assert "70%" in prompt and "30%" in prompt
+    # Focus 70%, and stress 0.3 reaches the model as calm 70%.
+    assert "average focus 70%" in prompt and "70%\n" in prompt.split("average calm")[1]
 
 
 def test_strategy_prompt_carries_no_identifying_data():
@@ -1983,6 +2003,18 @@ _THREE_SAFE = (
 ])
 def test_validated_strategies_rejects_clinical_language(bad):
     assert main._validated_strategies(f"{_THREE_SAFE}\n{bad}") is None
+
+
+@pytest.mark.parametrize("bad", [
+    "4. Your child seemed stressed during practice this week",
+    "4. Stress readings ran high, so take more breaks",
+    "Lower stress first:\n",
+], ids=["stressed", "stress-readings", "preamble"])
+def test_validated_strategies_rejects_the_word_stress(bad):
+    """Calm is not a stress measure: a reply calling it one is rejected whole, preamble included."""
+    raw = f"{bad}\n{_THREE_SAFE}" if bad.endswith(":\n") else f"{_THREE_SAFE}\n{bad}"
+    assert main._validated_strategies(raw) is None
+    assert main._validated_strategies(_THREE_SAFE) is not None
 
 
 @pytest.mark.parametrize("ok", [

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useState } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
 import { m } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity, ChevronDown } from 'lucide-react'
@@ -18,9 +18,20 @@ import CCSSBadge from '../../components/questions/CCSSBadge'
 import { correctIndex, optionList } from '../../lib/answerKey'
 import { fmtDate } from '../../lib/dates'
 import { buildTimeline, downsample } from '../../lib/timeline'
+import { MEASURES } from '../../lib/signalGlossary'
 
 // About two points per horizontal pixel; an hour at 4 Hz is ~14,000 rows.
 const CHART_MAX_ROWS = 1500
+
+// One chart per unit, stacked on a shared time axis: never two y-axes on one chart.
+const TIMELINE_CHARTS = [
+  { axis: 'ratio', title: 'Focus and calm', domain: [0, 1], tick: v => `${Math.round(v * 100)}%`,
+    tip: v => `${Math.round(v * 100)}%` },
+  { axis: 'bpm', title: 'Heart rate', domain: ['auto', 'auto'], tick: v => `${Math.round(v)}`,
+    tip: v => `${Math.round(v)} bpm` },
+  { axis: 'ms', title: 'Heart-rate variability', domain: ['auto', 'auto'], tick: v => `${Math.round(v)}`,
+    tip: v => `${Math.round(v)} ms` },
+]
 
 // calibrating/unknown are shown, not dropped, so categorisation isn't overstated.
 const STRESS_COLOURS = {
@@ -97,24 +108,25 @@ function SessionReviewBody({ sessionId }) {
   // so a column always names a drawn series. Ratios are 0..1, hence `asPercent`.
   // Heart series are gated on `hasHeart`; no `engagement` (it is the focus index).
   const TIMELINE_SERIES = useMemo(() => [
-    { key: 'focus',  label: 'Focus',      unit: '%', scale: asPercent,
-      colour: '#6366f1', axis: 'ratio', name: 'Focus',      dot: false },
-    // "EEG stress": must never share a label with the heart stress pie.
-    { key: 'stress', label: 'EEG stress', unit: '%', scale: asPercent,
-      colour: '#f43f5e', axis: 'ratio', name: 'EEG stress', dot: false },
+    { key: 'focus',  label: MEASURES.focus.name, unit: '%', scale: asPercent,
+      colour: '#6366f1', axis: 'ratio', name: 'Focus', dot: false },
+    // Dashed, as on the reports: focus and calm are close for tritan vision.
+    { key: 'calm',   label: MEASURES.calm.name,  unit: '%', scale: asPercent,
+      colour: '#0d9488', axis: 'ratio', name: 'Calm',  dot: false, dash: '6 3' },
     ...(hasHeart ? [
       // `dot` on: heart readings are sparse, so an isolated point needs one.
-      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
-        colour: '#a855f7', axis: 'abs', name: 'Heart rate (bpm)', dot: { r: 2 } },
-      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms',
-        colour: '#f59e0b', axis: 'abs', name: 'RMSSD (ms)',       dot: { r: 2 } },
+      { key: 'heart_rate_bpm', label: MEASURES.heart_rate_bpm.name, unit: ' bpm',
+        colour: '#a855f7', axis: 'bpm', name: 'Heart rate (bpm)', dot: { r: 2 } },
+      { key: 'rmssd_ms',       label: MEASURES.rmssd_ms.name,       unit: ' ms',
+        colour: '#f59e0b', axis: 'ms', name: 'Heart-rate variability (ms)', dot: { r: 2 } },
     ] : []),
   ], [hasHeart])
   const shownSeries = useMemo(() => shownOf(TIMELINE_SERIES), [shownOf, TIMELINE_SERIES])
-  // Stable, so AccessibleChart's memoised sentence is not rebuilt over every row per render.
-  const TIMELINE_COLUMNS = useMemo(() => shownSeries.map(
-    ({ key, label, unit, scale }) => ({ key, label, unit, scale }),
-  ), [shownSeries])
+  // Per chart, and stable, so AccessibleChart's memoised sentence is not rebuilt on every render.
+  const TIMELINE_COLUMNS = useMemo(() => Object.fromEntries(TIMELINE_CHARTS.map(g => [g.axis,
+    shownSeries.filter(s => s.axis === g.axis).map(({ key, label, unit, scale }) => ({ key, label, unit, scale })),
+  ])), [shownSeries])
+  const syncId = useId()
 
   useEffect(() => {
     let killed = false
@@ -264,10 +276,16 @@ function SessionReviewBody({ sessionId }) {
                   charts as they were when it closed.
                 </p>
                 {isUrl(archivedChart('cognitive_timeline')) && (
-                  <ArchivedChart url={archivedChart('cognitive_timeline')} label="Cognitive timeline" />
+                  <>
+                    <ArchivedChart url={archivedChart('cognitive_timeline')} label="Focus and EEG stress" />
+                    {/* Stored archives draw stress, not calm; they are never re-rendered. */}
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                      Archived chart: the line its legend calls &ldquo;stress&rdquo; is EEG stress, the inverse of calm.
+                    </p>
+                  </>
                 )}
                 {isUrl(archivedChart('heart_rate')) && (
-                  <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and HRV" />
+                  <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and heart-rate variability" />
                 )}
                 {/* Say so when only one chart could be drawn. */}
                 {anyUnavailable(['cognitive_timeline', 'heart_rate']) && (
@@ -303,11 +321,16 @@ function SessionReviewBody({ sessionId }) {
               </button>
             </div>
           ) : (
-          <AccessibleChart className="h-72"
-            headline={`Session replay over ${series.length} readings.`}
+          <div className="space-y-3">
+          {/* A chart with no shown series is not mounted, so it leaves no empty axis or table. */}
+          {TIMELINE_CHARTS.filter(g => axisShown(g.axis)).map(g => (
+          <div key={g.axis}>
+          <p className="text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">{g.title}</p>
+          <AccessibleChart className="h-48"
+            headline={`Session replay: ${g.title.toLowerCase()} over ${series.length} readings.`}
             rows={series} rowKey="t" rowLabel="Seconds in"
-            columns={TIMELINE_COLUMNS}>
-              <LineChart data={chartRows} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            columns={TIMELINE_COLUMNS[g.axis]}>
+              <LineChart data={chartRows} syncId={syncId} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis
                   dataKey="t"
@@ -318,37 +341,31 @@ function SessionReviewBody({ sessionId }) {
                   fontSize={10}
                   minTickGap={50}
                 />
-                {/* bpm/RMSSD get their own axis; each mounts only while a shown series uses it. */}
-                {axisShown('ratio') && <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />}
-                {axisShown('abs') && (
-                  <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
-                         fontSize={10} />
-                )}
+                <YAxis domain={g.domain} tickFormatter={g.tick} fontSize={10} />
                 <ChartTooltip
                   labelFormatter={(v) => fmtTime(v)}
-                  formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)}
+                  formatter={(v, n) => [typeof v === 'number' ? g.tip(v) : v, n]}
                 />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                {shownSeries.map((s) => (
-                  <Line key={s.key} yAxisId={s.axis} type="monotone" dataKey={s.key}
-                        name={s.name} stroke={s.colour} dot={s.dot}
+                {/* One line needs no legend: the chart's title names it. */}
+                {TIMELINE_COLUMNS[g.axis].length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                {shownSeries.filter(s => s.axis === g.axis).map((s) => (
+                  <Line key={s.key} type="monotone" dataKey={s.key}
+                        name={s.name} stroke={s.colour} dot={s.dot} strokeDasharray={s.dash}
                         connectNulls isAnimationActive={false} />
                 ))}
 
-                {/* Heart sensor changes; gated on the "abs" axis they reference, not hasHeart. */}
-                {axisShown('abs') && failovers.map((f, i) => (
-                  <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
-                                 stroke="#a855f7" strokeOpacity={0.5} />
+                {/* Heart sensor changes, on both heart charts. */}
+                {g.axis !== 'ratio' && failovers.map((f, i) => (
+                  <ReferenceLine key={`fo-${i}`} x={f.t} stroke="#a855f7" strokeOpacity={0.5} />
                 ))}
 
-                {/* Answer markers as vertical reference lines. */}
-                {axisShown('ratio') && answers.map((a, i) => {
+                {/* Answer markers as vertical reference lines, on the focus and calm chart. */}
+                {g.axis === 'ratio' && answers.map((a, i) => {
                   const x = new Date(a.answered_at).getTime()
                   if (!Number.isFinite(x) || x < tMin || x > tMax) return null
                   return (
                     <ReferenceLine
                       key={i}
-                      yAxisId="ratio"
                       x={x}
                       stroke={a.correct ? '#10b981' : '#f43f5e'}
                       strokeDasharray="3 3"
@@ -358,6 +375,9 @@ function SessionReviewBody({ sessionId }) {
                 })}
               </LineChart>
           </AccessibleChart>
+          </div>
+          ))}
+          </div>
           )}
           </>
         )}
@@ -437,15 +457,15 @@ function SessionReviewBody({ sessionId }) {
           {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))
             || archivedChart('stress_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
-              {/* Not bare "Stress": never share a label with "EEG stress". */}
-              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
+              {/* The heart measure's own name: never "stress", which the EEG calm score is stored as. */}
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">{MEASURES.body_arousal.name}</h2>
               {stressSlices.length === 0 ? (
                 isUrl(archivedChart('stress_pie'))
-                  ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
+                  ? <ArchivedChart url={archivedChart('stress_pie')} label={MEASURES.body_arousal.name} />
                   : <p className="text-sm text-gray-600 py-6 text-center dark:text-gray-400">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
-                {...sliceSpec('Heart-rate stress', stressSlices, 'windows', { rowLabel: 'Band' })}>
+                {...sliceSpec(MEASURES.body_arousal.name, stressSlices, 'windows', { rowLabel: 'Band' })}>
                   <PieChart>
                     <Pie data={stressSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>

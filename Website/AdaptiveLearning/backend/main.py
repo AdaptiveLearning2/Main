@@ -1555,17 +1555,20 @@ _RECORDING_SWITCHES = {"record_eeg": "recording_eeg_enabled",
 _SWITCHED_OFF = "recording is switched off by an administrator"
 
 
-def _paused_channels(eeg: bool = True, heart: bool = True, emotion: bool = True) -> list[str]:
+def _paused_channels(eeg: bool = True, heart: bool = True, emotion: bool = True,
+                     heart_sensors: tuple | None = None) -> list[str]:
     """Report channels an administrator has switched off, among those the student has on.
 
     The flags say which channels a report may name: a channel off for consent has nothing to pause.
-    Heart is paused only when both its sources are (headband and camera). School-wide; unreadable
-    flags answer their defaults (all on), so no claim is made.
+    Heart is paused when every consented heart sensor is (`ReportChannels.heart_sensors`); unknown,
+    both must be. Unreadable flags answer their defaults (all on), so no claim is made.
     """
     flags = _feature_flags()
     off = {k: not flags[f"recording_{k}_enabled"]["enabled"] for k in ("eeg", "heart", "camera")}
+    by_sensor = {"headband_optical": off["heart"], "camera": off["camera"]}
+    sensors = tuple(heart_sensors) if heart_sensors is not None else tuple(by_sensor)
     paused = {"eeg": eeg and off["eeg"],
-              "heart": heart and off["heart"] and off["camera"],
+              "heart": heart and bool(sensors) and all(by_sensor.get(s, False) for s in sensors),
               "emotion": emotion and off["camera"]}
     return [ch for ch, is_paused in paused.items() if is_paused]
 
@@ -1758,7 +1761,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     heart_revoked_at: str | None = None,
                     eeg_enabled: bool = True,
                     eeg_revoked_at: str | None = None,
-                    erased: dict | None = None) -> dict:
+                    erased: dict | None = None,
+                    heart_sensors: tuple | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres; a declined channel is never read.
 
     Carries `dominant_emotion`, which `_signal_summaries` does not.
@@ -1781,7 +1785,7 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
                              eeg_revoked_at=eeg_revoked_at,
-                             erased=erased)
+                             erased=erased, heart_sensors=heart_sensors)
     summary["score_scale"] = _scale_ranges_many([student_id], days).get(str(student_id))
     # Not in `_shape_summary`: the batch RPC has no such field.
     summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_emotion else None
@@ -1806,7 +1810,8 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                    heart_revoked_at: str | None = None,
                    eeg_enabled: bool = True,
                    eeg_revoked_at: str | None = None,
-                   erased: dict | None = None) -> dict:
+                   erased: dict | None = None,
+                   heart_sensors: tuple | None = None) -> dict:
     """The summary payload.
 
     `retrieved: False` means the aggregate read failed, as distinct from nothing
@@ -1820,7 +1825,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                 "emotion_revoked_at": emotion_revoked_at,
                 "heart_revoked_at": heart_revoked_at,
                 "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at,
-                "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion),
+                "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion, heart_sensors),
                 **erased}
     return {
         "focus": row.get("focus"),
@@ -1850,7 +1855,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # Consent, not an inclusion flag: the cognitive channel is always read.
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
-        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion),
+        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion, heart_sensors),
         **erased,
     }
 
@@ -1892,7 +1897,8 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
             eeg_revoked_at=ch.eeg_revoked_at if ch else None,
-            erased=_erased_fields(ch, since) if ch else _NO_ERASURES)
+            erased=_erased_fields(ch, since) if ch else _NO_ERASURES,
+            heart_sensors=ch.heart_sensors if ch else None)
         out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
@@ -2204,7 +2210,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                           emotion_revoked_at: str | None = None,
                           heart_revoked_at: str | None = None,
                           eeg_enabled: bool = True,
-                          eeg_revoked_at: str | None = None):
+                          eeg_revoked_at: str | None = None,
+                          heart_sensors: tuple | None = None):
     """Averages, highlights and per-day buckets of a student's recent signals.
 
     Callers must already have authorised the viewer. A false flag skips that
@@ -2546,7 +2553,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # EEG is always read, so no `eeg_included`; the tiles need these to say "Off since".
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
-        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion),
+        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion, heart_sensors),
         "emotion_distribution": (dict(sorted(emotion_counts.items(),
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),
@@ -4505,7 +4512,8 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                    emotion_revoked_at=channels.emotion_revoked_at,
                                    heart_revoked_at=channels.heart_revoked_at,
                                    eeg_enabled=channels.eeg,
-                                   eeg_revoked_at=channels.eeg_revoked_at)
+                                   eeg_revoked_at=channels.eeg_revoked_at,
+                                   heart_sensors=channels.heart_sensors)
     avg, hl, n = report["averages"], report["highlights"], report["average_samples"]
     read = report["retrieved"]
     start, end = _report_period(days)
@@ -4543,7 +4551,8 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                               heart_revoked_at=channels.heart_revoked_at,
                               eeg_enabled=channels.eeg,
                               eeg_revoked_at=channels.eeg_revoked_at,
-                              erased=_erased_fields(channels, _window_start(days)))
+                              erased=_erased_fields(channels, _window_start(days)),
+                              heart_sensors=channels.heart_sensors)
     start, end = _report_period(days)
     context = _lesson_context({student_id: summary}, {student_id: channels.heart}, days)
     summary["usual"] = _personal_baseline(
@@ -8999,7 +9008,8 @@ def my_children(request: Request, include_face: bool = True):
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at,
                                                 eeg_enabled=channels_by_child[cid].eeg,
                                                 eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
-                                                erased=_erased_fields(channels_by_child[cid], since)),
+                                                erased=_erased_fields(channels_by_child[cid], since),
+                                                heart_sensors=channels_by_child[cid].heart_sensors),
         })
         children[-1]["signal_summary"] = {**children[-1]["signal_summary"],
                                           "usual": usual.get(str(cid))}

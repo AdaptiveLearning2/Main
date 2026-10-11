@@ -679,3 +679,27 @@ def test_unreadable_flags_pause_nothing(monkeypatch):
     main._feature_flags_cache_clear()
 
     assert main._paused_channels() == []
+
+
+@pytest.mark.parametrize("sensors,switches,paused", [
+    (("headband_optical",), ("heart",), True),
+    (("headband_optical",), ("camera",), False),
+    (("camera",), ("camera",), True),
+    (("headband_optical", "camera"), ("heart",), False),
+    (("headband_optical", "camera"), ("heart", "camera"), True),
+    ((), ("heart", "camera"), False),
+])
+def test_heart_is_paused_when_every_sensor_the_student_uses_is(monkeypatch, sensors, switches, paused):
+    _switch_off(monkeypatch, *switches)
+    assert ("heart" in main._paused_channels(heart_sensors=sensors)) is paused
+
+
+def test_the_weekly_endpoint_pauses_a_headband_only_students_heart(monkeypatch):
+    """Through the endpoint, so the consented sensors reach the payload rather than the both-off default."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(_consent_row(headband=True, camera=False))))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+    _switch_off(monkeypatch, "heart")
+
+    assert main.student_weekly_report(STUDENT, None)["paused_channels"] == ["heart"]

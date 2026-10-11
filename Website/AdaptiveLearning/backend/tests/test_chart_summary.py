@@ -160,7 +160,8 @@ def test_a_clinical_term_anywhere_in_the_reply_rejects_it():
                                    "disconnected", "wasn't working", "wasn’t working", "didn't work",
                                    "is not working", "didn't work at all", "doesn't work",
                                    "hasn't been working", "sensor not working", "lost connection",
-                                   "had technical problems"])
+                                   "had technical problems", "stopped giving us data",
+                                   "stopped sending readings", "no longer providing data"])
 def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     """The run's wording: a withdrawal read as "before the sensor stopped working"."""
     basis = _basis()
@@ -174,6 +175,28 @@ def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     caused = faithful.replace("turned off on 3 August", f"{cause} on 3 August")
     assert caused != faithful
     assert main._validated_chart_summary(caused, allowed, len(lines)) is None
+
+
+def test_the_eeg_withdrawal_line_must_keep_turned_off_and_a_rewording_falls_back_to_the_rules():
+    """The run's reply: "from before the sensor stopped giving us data on 9 October"."""
+    basis = _basis()
+    basis["channels"]["eeg"] = {"enabled": False, "samples": 12,
+                                "revoked_at": "2026-10-09T16:00:00+00:00"}
+    lines = main._rule_based_chart_summary(basis)
+    assert any("from before the sensor was turned off on 9 October" in line for line in lines)
+    allowed = main._chart_summary_figures(lines)
+    faithful = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    assert main._validated_chart_summary(faithful, allowed, len(lines)) is not None
+    reworded = faithful.replace("the sensor was turned off on 9 October",
+                                "the sensor stopped giving us data on 9 October")
+    assert reworded != faithful
+    assert main._validated_chart_summary(reworded, allowed, len(lines)) is None
+
+
+@pytest.mark.parametrize("text", ["Taylor stopped giving up on fractions after the first week.",
+                                  "Focus was steady and the student stopped giving wrong answers."])
+def test_stopped_giving_about_effort_is_not_a_cause(text):
+    assert not main._names_a_cause(text)
 
 
 def test_a_reply_saying_a_read_failed_is_still_accepted():

@@ -4680,6 +4680,8 @@ _IDEA_SUBJECTS = frozenset({"idea", "ideas", "lesson", "lessons", "concept", "co
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
+    r"(?:stopped|stops|ceased|no longer) (?:giving|sending|providing|supplying|reporting|collecting)"
+    r"(?: us| the (?:app|system))? (?:any |more |new )?(?:data|readings?|figures|signals?)|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
     r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
@@ -5665,8 +5667,8 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "Do not add any number, percentage or figure that is not already in "
         "these points, do not move a number from one point to another, and do "
         "not draw a conclusion the points do not state. Never say or imply why a "
-        "sensor was off or a reading is missing (for example that it broke or "
-        "stopped working): keep the points' own words for it.\n"
+        "sensor was off or a reading is missing (for example that it broke, "
+        "stopped working or stopped giving data): keep the points' own words for it.\n"
         "Calm and body arousal are different measurements from different sensors: never "
         "combine them, and never call calm \"stress\".\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"

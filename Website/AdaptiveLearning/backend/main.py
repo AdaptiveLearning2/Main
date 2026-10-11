@@ -4778,6 +4778,17 @@ _STOPPED_SENDING = re.compile(
     r"(?:\s+us|\s+the\s+(?:app|system))?\s+(?:any\s+|more\s+|new\s+)?(?:data|readings?|figures|signals?)\b",
     re.IGNORECASE)
 _OFF_STATED = re.compile(r"\b(?:turned|switched)\s+off\b|\bpaused\b", re.IGNORECASE)
+_SENSOR_NAME = re.compile(r"\b(headband|headset|muse|eeg|camera|webcam|heart|pulse|optical)\b", re.IGNORECASE)
+
+
+def _stoppage_excused(line: str, m: re.Match) -> bool:
+    """A "turned off" earlier in this point, with no sensor named after it that the point had not named before it."""
+    offs = list(_OFF_STATED.finditer(line, 0, m.start()))
+    if not offs:
+        return False
+    before = {n.lower() for n in _SENSOR_NAME.findall(line, 0, offs[-1].start())}
+    between = {n.lower() for n in _SENSOR_NAME.findall(line, offs[-1].end(), m.start())}
+    return between <= before
 
 
 def _names_a_cause(text: str) -> bool:
@@ -4785,7 +4796,7 @@ def _names_a_cause(text: str) -> bool:
     if _CAUSE_TERMS.search(text):
         return True
     # Per line, since a reply's points are lines: one point's "turned off" must not excuse another sensor's stoppage.
-    if any(not _OFF_STATED.search(line[:m.start()])
+    if any(not _stoppage_excused(line, m)
            for line in text.splitlines() for m in _STOPPED_SENDING.finditer(line)):
         return True
     if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):

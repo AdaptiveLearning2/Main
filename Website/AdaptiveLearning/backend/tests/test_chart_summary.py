@@ -217,6 +217,16 @@ def test_a_stoppage_stated_before_any_turned_off_is_still_a_cause(text):
     assert main._names_a_cause(text)
 
 
+@pytest.mark.parametrize("text,cause", [
+    ("The headband was turned off on 3 October, and the heart sensor stopped sending data.", True),
+    ("The headband was turned off on 3 October, so the camera no longer sends readings.", True),
+    ("The headband was turned off on 3 October, so the headband no longer sends readings.", False),
+    ("Readings are from before the sensor was turned off; it no longer sends readings.", False),
+])
+def test_turned_off_excuses_only_a_stoppage_about_the_same_sensor(text, cause):
+    assert main._names_a_cause(text) is cause
+
+
 def test_one_points_turned_off_does_not_excuse_another_points_stoppage():
     """Every withdrawn-headband student gets point 1, so it must not let a heart fault through."""
     basis = _basis()

@@ -4771,10 +4771,8 @@ def _subject_names_a_cause(subject: str, bare: bool) -> bool:
     return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS | _IDEA_SUBJECTS
 
 
-# "Stopped giving us data" reads as a fault, unless "turned off" or "paused" comes first in the same sentence:
-# then it is the consequence of a stated cause. A sentence ends at . ! ? before a capital (so "3 Oct." does
-# not end one) or a newline; a ";" keeps the cause attached.
-_FULL_STOP = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"“'‘])|\n")
+# "Stopped giving us data" reads as a fault, unless "turned off" or "paused" was said anywhere before it:
+# then it is the consequence of a stated cause. Order, not sentence bounds, so "3 Oct." and ";" cannot split it.
 _STOPPED_SENDING = re.compile(
     r"\b(?:stopped|stops|ceased|no\s+longer)\s+(?:giv|send|provid|suppl|report|collect)\w*"
     r"(?:\s+us|\s+the\s+(?:app|system))?\s+(?:any\s+|more\s+|new\s+)?(?:data|readings?|figures|signals?)\b",
@@ -4786,10 +4784,8 @@ def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
         return True
-    for sentence in _FULL_STOP.split(text):
-        m = _STOPPED_SENDING.search(sentence)
-        if m and not _OFF_STATED.search(sentence[:m.start()]):
-            return True
+    if any(not _OFF_STATED.search(text[:m.start()]) for m in _STOPPED_SENDING.finditer(text)):
+        return True
     if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):
         return True
     for m in _CONNECT_FAILURE.finditer(text):

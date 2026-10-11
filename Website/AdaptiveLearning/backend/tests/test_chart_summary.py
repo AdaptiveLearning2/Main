@@ -204,7 +204,8 @@ def test_other_forms_of_stopped_sending_are_a_cause(text):
     "The sensor was turned off, so the app stopped collecting data.",
     "Recording is paused, so it no longer sends readings.",
     "The sensor was turned off on 3 Oct; it no longer sends readings.",
-    "It was turned off on 3 Oct. and since then it no longer sends readings."])
+    "It was turned off on 3 Oct. and since then it no longer sends readings.",
+    "The sensor was turned off on 3 October. It no longer sends readings."])
 def test_stopped_sending_after_turned_off_or_paused_is_the_cause_already_stated(text):
     assert not main._names_a_cause(text)
 

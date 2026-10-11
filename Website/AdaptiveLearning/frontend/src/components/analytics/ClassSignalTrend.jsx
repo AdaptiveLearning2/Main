@@ -7,7 +7,7 @@ import Panel from './Panel'
 import ScaleNote from '../signals/ScaleNote'
 import { calmRatio } from '../../lib/signalFormat'
 import { MEASURES } from '../../lib/signalGlossary'
-import { LINE_LEGEND } from '../charts/legendProps'
+import { LINE_LEGEND, lineDash } from '../charts/legendProps'
 
 /**
  * The class's signal averages per school day. Days with nothing recorded stay
@@ -100,7 +100,7 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
                 {/* Filled dots: Recharts' default white centre reads as hollow. */}
                 {c.series.map(s => (
                   <Line key={s.key} type="monotone" dataKey={s.key} name={s.label}
-                    stroke={s.colour} strokeWidth={2} strokeDasharray={s.dash}
+                    stroke={s.colour} strokeWidth={2} {...lineDash(s.dash)}
                     dot={{ r: 3, fill: s.colour, strokeWidth: 0 }} connectNulls={false} />
                 ))}
               </LineChart>

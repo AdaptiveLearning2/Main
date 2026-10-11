@@ -12,7 +12,7 @@ import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
 import { seriesDot } from '../charts/roughDot'
-import { LINE_LEGEND, legendText } from '../charts/legendProps'
+import { LINE_LEGEND, legendText, lineDash } from '../charts/legendProps'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 import { calmPct, calmRatio, emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
@@ -238,7 +238,7 @@ function SignalCharts({ rows, heartShown, rowLabel, rowNoun, period, filterLabel
                     {/* Dots, so a single recorded point is still visible. */}
                     {lines.map(s => (
                       <Line key={s.key} type="monotone" dataKey={s.key} stroke={s.colour}
-                            strokeWidth={2} strokeDasharray={s.dash}
+                            strokeWidth={2} {...lineDash(s.dash)}
                             dot={seriesDot(s)}
                             name={s.name} connectNulls={false} />
                     ))}

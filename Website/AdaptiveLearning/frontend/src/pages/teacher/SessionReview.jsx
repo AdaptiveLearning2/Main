@@ -19,7 +19,7 @@ import { correctIndex, optionList } from '../../lib/answerKey'
 import { fmtDate } from '../../lib/dates'
 import { buildTimeline, downsample } from '../../lib/timeline'
 import { MEASURES } from '../../lib/signalGlossary'
-import { LINE_LEGEND, legendText } from '../../components/charts/legendProps'
+import { LINE_LEGEND, legendText, lineDash } from '../../components/charts/legendProps'
 
 // About two points per horizontal pixel; an hour at 4 Hz is ~14,000 rows.
 const CHART_MAX_ROWS = 1500
@@ -351,7 +351,7 @@ function SessionReviewBody({ sessionId }) {
                 {TIMELINE_COLUMNS[g.axis].length > 1 && <Legend {...LINE_LEGEND} wrapperStyle={{ fontSize: 12 }} />}
                 {shownSeries.filter(s => s.axis === g.axis).map((s) => (
                   <Line key={s.key} type="monotone" dataKey={s.key}
-                        name={s.name} stroke={s.colour} dot={s.dot} strokeDasharray={s.dash}
+                        name={s.name} stroke={s.colour} dot={s.dot} {...lineDash(s.dash)}
                         connectNulls isAnimationActive={false} />
                 ))}
 

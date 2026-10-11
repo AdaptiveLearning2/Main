@@ -1,10 +1,16 @@
 import { render } from '@testing-library/react'
-import { LINE_LEGEND, legendText } from './legendProps'
+import { LINE_LEGEND, legendText, lineDash } from './legendProps'
 
 describe('chart legends', () => {
   it('draw a line chart\'s icon as the line itself, so a dashed series shows dashed', () => {
     expect(LINE_LEGEND.iconType).toBe('plainline')
     expect(LINE_LEGEND.formatter).toBe(legendText)
+  })
+
+  it('pass a dash only when a series has one, never the key with undefined', () => {
+    expect(lineDash('6 3')).toEqual({ strokeDasharray: '6 3' })
+    expect(lineDash(undefined)).toEqual({})
+    expect('strokeDasharray' in lineDash(undefined)).toBe(false)
   })
 
   it('keep legend text in a text colour, not the series colour', () => {

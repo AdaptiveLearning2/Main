@@ -3,3 +3,6 @@ export const legendText = value => <span className="text-gray-700 dark:text-gray
 
 // A line chart's legend icon is the line itself, dash included.
 export const LINE_LEGEND = { iconType: 'plainline', formatter: legendText }
+
+// Spread onto a `<Line>`: an absent key, not `undefined`, or the legend icon writes the string "undefined".
+export const lineDash = dash => (dash ? { strokeDasharray: dash } : {})

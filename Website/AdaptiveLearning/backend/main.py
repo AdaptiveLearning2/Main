@@ -5661,7 +5661,8 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
 _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
 # Body arousal counts readings; time words turn it back into the time-share it is not.
-_TIME_SHARE = re.compile(r"\b(how often|of the time|time spent|spent \w+ (above|over))\b", re.IGNORECASE)
+_TIME_SHARE = re.compile(r"\b(how often|often|time spent|spent)\b"
+                         r"|(%|\bpercent|\bshare|\bpart)\s+of\s+the\s+(time|lesson)\b", re.IGNORECASE)
 
 
 def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,

@@ -4771,7 +4771,7 @@ def _subject_names_a_cause(subject: str, bare: bool) -> bool:
     return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS | _IDEA_SUBJECTS
 
 
-# "Stopped giving us data" reads as a fault, unless "turned off" or "paused" was said anywhere before it:
+# "Stopped giving us data" reads as a fault, unless "turned off" or "paused" came before it in the same point:
 # then it is the consequence of a stated cause. Order, not sentence bounds, so "3 Oct." and ";" cannot split it.
 _STOPPED_SENDING = re.compile(
     r"\b(?:stopped|stops|ceased|no\s+longer)\s+(?:giv|send|provid|suppl|report|collect)\w*"
@@ -4784,7 +4784,9 @@ def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
         return True
-    if any(not _OFF_STATED.search(text[:m.start()]) for m in _STOPPED_SENDING.finditer(text)):
+    # Per line, since a reply's points are lines: one point's "turned off" must not excuse another sensor's stoppage.
+    if any(not _OFF_STATED.search(line[:m.start()])
+           for line in text.splitlines() for m in _STOPPED_SENDING.finditer(line)):
         return True
     if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):
         return True

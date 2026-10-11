@@ -217,6 +217,26 @@ def test_a_stoppage_stated_before_any_turned_off_is_still_a_cause(text):
     assert main._names_a_cause(text)
 
 
+def test_one_points_turned_off_does_not_excuse_another_points_stoppage():
+    """Every withdrawn-headband student gets point 1, so it must not let a heart fault through."""
+    basis = _basis()
+    basis["channels"]["eeg"] = {"enabled": False, "samples": 12,
+                                "revoked_at": "2026-10-03T16:00:00+00:00"}
+    lines = main._rule_based_chart_summary(basis)
+    assert any("turned off on 3 October" in line for line in lines)
+    heart = next(i for i, line in enumerate(lines) if "heart rate" in line.lower())
+    allowed = main._chart_summary_figures(lines)
+    faulty = list(lines)
+    faulty[heart] = faulty[heart].rstrip(".") + ", and the heart sensor stopped sending data this week."
+    reply = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(faulty))
+    faithful = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    assert main._validated_chart_summary(faithful, allowed, len(lines)) is not None
+
+    assert main._names_a_cause(f"1. Readings are from before the sensor was turned off on 3 October.\n"
+                               f"2. The heart sensor stopped sending data this week.")
+    assert main._validated_chart_summary(reply, allowed, len(lines)) is None
+
+
 @pytest.mark.parametrize("text", ["Taylor stopped giving up on fractions after the first week.",
                                   "Focus was steady and the student stopped giving wrong answers."])
 def test_stopped_giving_about_effort_is_not_a_cause(text):

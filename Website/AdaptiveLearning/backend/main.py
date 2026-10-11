@@ -5660,12 +5660,19 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
 _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
-# Body arousal counts readings; time words turn it back into the time-share it is not.
-# A possessive ("the lesson's / lessons' readings") is exempt unless a time word follows it.
-_TIME_SHARE = re.compile(r"\b(how often|often|time spent|spent)\b"
-                         r"|(%|\bpercent|\bshare)\s+of\s+((the|each|a|their)\s+)?(time|lesson|session)(s\b|\b)"
-                         r"(?!(['’]s|['’])\s+(?!(time|duration|length)\b)\w)",
-                         re.IGNORECASE)
+# Body arousal is a share of readings: a rewording of its definition keeps that word, and no
+# body-arousal line says how often or time spent. Absent-state points define nothing, so need no "readings".
+_DEFINES_SHARE = re.compile(r"\bshare of\b", re.IGNORECASE)
+_READINGS_WORD = re.compile(r"\breadings?\b", re.IGNORECASE)
+_TIME_SHARE = re.compile(r"\b(how often|often|time spent|spent)\b", re.IGNORECASE)
+
+
+def _arousal_reworded_as_time(line: str, base: str) -> bool:
+    """A body-arousal line that drops its definition's "readings", or adds a time phrase its point lacked."""
+    if "arousal" not in line.lower():
+        return False
+    return (bool(_DEFINES_SHARE.search(base)) and not _READINGS_WORD.search(line)) \
+        or (bool(_TIME_SHARE.search(line)) and not _TIME_SHARE.search(base))
 
 
 def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
@@ -5692,9 +5699,8 @@ def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
                                     for line, base in zip(lines, baseline)):
         print("[chart_summary:llm] rejected: it says stress where the point did not")
         return None
-    if baseline is not None and any(
-            "arousal" in line.lower() and _TIME_SHARE.search(line) and not _TIME_SHARE.search(base)
-            for line, base in zip(lines, baseline)):
+    if baseline is not None and any(_arousal_reworded_as_time(line, base)
+                                    for line, base in zip(lines, baseline)):
         print("[chart_summary:llm] rejected: it describes body arousal as a share of time")
         return None
     # Each point keeps its own numbers and stays a sensor point or not, so `sensor_lines` holds.

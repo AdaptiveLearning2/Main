@@ -624,9 +624,11 @@ two impossible — the same reason `AccessibleChart` drives its sentence and tab
 and the comparison with the child's usual is in words only, so it adds no number. `_validated_chart_summary` rejects a
 reply line that says "stress" where the matching rule-based line does not. `basis.sensor_lines` indexes the sensor
 sentences so "Hide sensor data" can drop exactly those, and the validator enforces the order that relies on: each
-reply line may use only its own point's numbers, and is a sensor line exactly when its point is. A reply that
-describes body arousal with time words ("how often", "of the time") where its point did not is rejected too
-(`_TIME_SHARE`): it is a share of readings.
+reply line may use only its own point's numbers, and is a sensor line exactly when its point is. Body arousal is a
+share of readings, so a rewording of its defining point must keep "readings", and no body-arousal line may add
+"how often", "often", "time spent" or "spent" (`_arousal_reworded_as_time`). Requiring the word, rather than listing
+time phrasings, is deliberate: every list missed the next phrasing. The cost is that a line dropping the definition
+falls back to the rule-based text.
 
 **What it still does not check is a number's meaning within one point.** A reply that relabels a figure inside its
 own sentence uses only that sentence's numbers and passes. That is the residual hallucination risk on this endpoint and it

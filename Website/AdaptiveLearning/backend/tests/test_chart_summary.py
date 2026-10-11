@@ -557,13 +557,34 @@ _AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readi
     "Body arousal -- 0% of the lessons' duration was at least 10 beats a minute above the start.",
     "Body arousal -- 0% of time spent at least 10 beats a minute above the start.",
     "Body arousal -- 0%, the lesson spent well above 10 beats a minute over the start.",
+    "Body arousal -- 0% of the lesson’s total time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the session's whole length was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of each lesson's minutes were at least 10 beats a minute above the start.",
+    # "readings" kept, but with a time phrase the point lacks.
+    "Body arousal -- how often the readings were at least 10 beats a minute above the start -- was 0%.",
 ], ids=["how-often", "often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
         "of-each-lesson", "of-the-session", "of-lesson-time",
         "lessons-time", "each-lessons-time", "sessions-length", "plural-lessons-duration",
-        "time-spent", "spent-above"])
+        "time-spent", "spent-above", "total-time", "whole-length", "lessons-minutes",
+        "readings-but-how-often"])
 def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     """It is a share of readings; a time-share reading is the claim the glossary removed."""
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) is None
+
+
+def test_a_body_arousal_line_that_drops_the_definition_falls_back():
+    """The stated cost of requiring "readings": a shorter, accurate line is rejected too."""
+    assert main._validated_chart_summary("1. Body arousal was 0%.", {0.0}, 1, [_AROUSAL_BASE]) is None
+
+
+def test_an_absent_state_rewording_need_not_say_readings():
+    """Those points say why there is no figure; they define nothing, so "readings" is not required."""
+    base = main._BODY_AROUSAL_ABSENT["pending"]
+    line = "Body arousal has no figure yet for this period, since a lesson is still under way."
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+    # The time phrases are still refused there.
+    spent = "Body arousal has no figure yet, as time spent in the open lesson is not counted."
+    assert main._validated_chart_summary(f"1. {spent}", set(), 1, [base]) is None
 
 
 @pytest.mark.parametrize("line", [

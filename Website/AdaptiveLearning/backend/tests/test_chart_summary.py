@@ -568,7 +568,13 @@ def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     "measured at the start of the lesson -- was 0%.",
     "Body arousal -- the share of usable heart readings at least 10 beats a minute above the rate "
     "in the first part of the lesson -- was 0%.",
-], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson"])
+    # A possessive names whose readings, not a share of the lesson's time; both apostrophes.
+    "Body arousal -- the share of the lesson's readings at least 10 beats a minute above the start "
+    "-- was 0%.",
+    "Body arousal -- the share of the session’s readings at least 10 beats a minute above the start "
+    "-- was 0%.",
+], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson",
+        "lessons-readings-straight", "sessions-readings-curly"])
 def test_a_faithful_body_arousal_rephrasing_passes(line):
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
 

@@ -632,8 +632,9 @@ reply line may use only its own point's numbers, and is a sensor line exactly wh
   "time spent", "spent", or an amount put on the lesson itself, "0% of the lesson", "more of the lesson"; "of the
   lesson's usable heart readings" is fine). Requiring the word rather than listing time phrasings is deliberate: every
   list missed the next one. The cost is that a line dropping the definition falls back to the rule-based text.
-- **a verdict** ("body arousal was higher than usual"): only the body-arousal clause is checked for time phrases, so
-  "focus often dipped" beside it passes.
+- **a verdict** ("body arousal was higher than usual"): the text from "arousal" to the next measure's name or the
+  line's end is checked for time phrases (`_AROUSAL_SPAN`), however many "and"s it holds, so "focus often dipped"
+  beside it passes and "…and stayed up for most of the lesson" after it does not.
 - **no figure** (calibrating, unsteady, not enough history, lesson in progress): no time check, since "often" and "most
   of the lesson" mean other things there, but the line may not gain a level or comparison (`_FIGURE_WORDS`): "was
   raised" where there is no figure states a measurement that does not exist.

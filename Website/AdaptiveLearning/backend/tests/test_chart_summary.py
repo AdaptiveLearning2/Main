@@ -623,6 +623,17 @@ def test_only_the_body_arousal_clause_of_a_verdict_is_checked_for_time():
             "and body arousal was higher than usual.")
     line = "Next to their earlier days, focus often dipped below usual and body arousal was higher than usual."
     assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+    # Order reversed: the span stops at the next measure's name.
+    after = "Next to their earlier days, body arousal was higher than usual and focus often dipped below usual."
+    assert main._validated_chart_summary(f"1. {after}", set(), 1, [base]) == [after]
+
+
+def test_every_phrase_about_body_arousal_in_a_verdict_is_checked():
+    base = ("Compared with this student's own earlier days, focus was lower than usual "
+            "and body arousal was higher than usual.")
+    line = ("Next to their earlier days, focus was lower than usual and body arousal was higher "
+            "than usual and stayed up for most of the lesson.")
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) is None
 
 
 def test_a_share_of_something_else_is_not_body_arousal():

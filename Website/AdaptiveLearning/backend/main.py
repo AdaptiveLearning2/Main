@@ -5675,7 +5675,9 @@ _TIME_SHARE = re.compile(
     re.IGNORECASE)
 # With "body arousal" named in the point: its figure ("share of") or a verdict on it.
 _AROUSAL_FIGURE = re.compile(r"\bshare of\b|\bbody arousal was\b", re.IGNORECASE)
-_CLAUSES = re.compile(r"[,;:]|\band\b|\bbut\b", re.IGNORECASE)
+# From "arousal" to the next measure's name or the line's end: everything said about it, however joined.
+_AROUSAL_SPAN = re.compile(r"arousal.*?(?=\b(focus|calm|heart rate|heart-rate variability)\b|$)",
+                           re.IGNORECASE | re.DOTALL)
 
 
 def _adds(pattern: re.Pattern, text: str, base: str) -> bool:
@@ -5685,15 +5687,15 @@ def _adds(pattern: re.Pattern, text: str, base: str) -> bool:
 def _misstates_body_arousal(line: str, base: str) -> bool:
     """A rewording that turns body arousal into time, drops its "readings", or invents a figure.
 
-    Figure point: keeps "readings" and gains no time phrase. Verdict point: only the body-arousal
-    clause is checked for time. No-figure point: gains no level or comparison.
+    Figure point: keeps "readings" and gains no time phrase. Verdict point: from "arousal" to the next
+    measure is checked for time. No-figure point: gains no level or comparison.
     """
     names = "body arousal" in base.lower()
     if names and _DEFINES_SHARE.search(base):
         return not _READINGS_WORD.search(line) or _adds(_TIME_SHARE, line, base)
     if names and _AROUSAL_FIGURE.search(base):
-        clauses = [c for c in _CLAUSES.split(line) if "arousal" in c.lower()] or [line]
-        return any(_adds(_TIME_SHARE, c, base) for c in clauses)
+        spans = [m.group(0) for m in _AROUSAL_SPAN.finditer(line)] or [line]
+        return any(_adds(_TIME_SHARE, s, base) for s in spans)
     if names:
         return _adds(_FIGURE_WORDS, line, base)
     # A line bringing body arousal into a point that never mentioned it.

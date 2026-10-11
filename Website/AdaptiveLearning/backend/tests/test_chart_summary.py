@@ -542,7 +542,7 @@ _AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readi
 
 @pytest.mark.parametrize("line", [
     "Body arousal measures how often the heart rate was at least 10 beats a minute higher, at 0%.",
-    "Body arousal -- the heart rate was often at least 10 beats a minute above the start -- was 0%.",
+    "Body arousal -- the readings were often at least 10 beats a minute above the start -- was 0%.",
     "Body arousal -- the share of the time the heart rate was 10 beats a minute up -- was 0%.",
     "Body arousal -- 0% of the lesson spent at least 10 beats a minute above the start.",
     "Body arousal -- 0% of the lesson was at least 10 beats a minute above the start.",
@@ -574,7 +574,18 @@ def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
 
 def test_a_body_arousal_line_that_drops_the_definition_falls_back():
     """The stated cost of requiring "readings": a shorter, accurate line is rejected too."""
-    assert main._validated_chart_summary("1. Body arousal was 0%.", {0.0}, 1, [_AROUSAL_BASE]) is None
+    line = "Body arousal this period came to 0%, against a 10 beat a minute line."
+    assert len(line) >= main._CHART_SUMMARY_MIN_CHARS
+    assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) is None
+    # The same line with the word kept passes, so "readings" is what decides it.
+    kept = "Body arousal this period came to 0% of readings, against a 10 beat a minute line."
+    assert main._validated_chart_summary(f"1. {kept}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [kept]
+
+
+def test_the_time_words_bind_only_body_arousal_lines():
+    base = "Average focus is 58%, and it was steady across the weeks."
+    line = "Focus averaged 58%, and it often held steady across the weeks."
+    assert main._validated_chart_summary(f"1. {line}", {58.0}, 1, [base]) == [line]
 
 
 def test_an_absent_state_rewording_need_not_say_readings():

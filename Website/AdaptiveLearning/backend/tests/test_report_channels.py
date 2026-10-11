@@ -634,20 +634,39 @@ def test_every_summary_payload_carries_the_erasure_fields_inside_its_window():
 
 # ── an administrator's switch is a state of its own ──────────────────────────
 
-@pytest.mark.parametrize("flag,channel", [("recording_eeg_enabled", "eeg"),
-                                          ("recording_heart_enabled", "heart"),
-                                          ("recording_camera_enabled", "emotion")])
-def test_a_switched_off_channel_is_named_in_both_report_payloads(monkeypatch, set_flag, flag, channel):
+def _switch_off(monkeypatch, *flags):
+    off = {f"recording_{k}_enabled" for k in flags}
+    monkeypatch.setattr(main, "_feature_flags", lambda: {
+        k: {"enabled": k not in off, "bypass_until": None} for k in main._FEATURE_FLAG_DEFAULTS})
+
+
+@pytest.mark.parametrize("switches,channels", [(("eeg",), ["eeg"]),
+                                               (("camera",), ["emotion"]),
+                                               # Heart has two sources: the camera's switch alone leaves one.
+                                               (("heart",), []),
+                                               (("heart", "camera"), ["heart", "emotion"])])
+def test_a_switched_off_channel_is_named_in_both_report_payloads(monkeypatch, switches, channels):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(_consent_row())))
     assert main._shape_summary(None)["paused_channels"] == []
     assert main._weekly_signal_report(STUDENT)["paused_channels"] == []
 
-    set_flag(flag, False)
+    _switch_off(monkeypatch, *switches)
 
     # Consent is on throughout: the switch is not a consent change.
-    assert main._shape_summary({"focus": 0.5})["paused_channels"] == [channel]
+    assert main._shape_summary({"focus": 0.5})["paused_channels"] == channels
     weekly = main._weekly_signal_report(STUDENT)
-    assert weekly["paused_channels"] == [channel] and weekly["eeg_enabled"] is True
+    assert weekly["paused_channels"] == channels and weekly["eeg_enabled"] is True
+
+
+def test_a_channel_the_student_has_off_is_not_called_paused(monkeypatch):
+    """A camera never consented to has nothing to pause; neither has a withdrawn headband."""
+    _switch_off(monkeypatch, "eeg", "heart", "camera")
+
+    got = main._shape_summary({"focus": 0.5}, include_heart=False, include_emotion=False,
+                              eeg_enabled=False)
+
+    assert got["paused_channels"] == []
+    assert main._shape_summary({"focus": 0.5}, include_heart=False)["paused_channels"] == ["eeg", "emotion"]
 
 
 def test_unreadable_flags_pause_nothing(monkeypatch):

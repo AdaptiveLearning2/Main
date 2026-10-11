@@ -1553,18 +1553,23 @@ _RECORDING_SWITCHES = {"record_eeg": "recording_eeg_enabled",
                        "record_headband_optical": "recording_heart_enabled",
                        "record_camera": "recording_camera_enabled"}
 _SWITCHED_OFF = "recording is switched off by an administrator"
-# Report channel names -> the admin switch behind each. Heart follows the headband's switch.
-_PAUSED_BY = {"eeg": "recording_eeg_enabled", "heart": "recording_heart_enabled",
-              "emotion": "recording_camera_enabled"}
 
 
-def _paused_channels() -> list[str]:
-    """Report channels an administrator has switched off, so a tile says paused, not 'No sensor'.
+def _paused_channels(eeg: bool = True, heart: bool = True, emotion: bool = True) -> list[str]:
+    """Report channels an administrator has switched off, among those the student has on.
 
-    School-wide, not per student. Unreadable flags answer their defaults (all on): no claim is made.
+    The flags say which channels a report may name: a channel off for consent has nothing to pause.
+    Heart is paused only when both its sources are (headband and camera). School-wide; unreadable
+    flags answer their defaults (all on), so no claim is made.
     """
     flags = _feature_flags()
-    return [ch for ch, flag in _PAUSED_BY.items() if not flags[flag]["enabled"]]
+    off = {k: not flags[f"recording_{k}_enabled"]["enabled"] for k in ("eeg", "heart", "camera")}
+    paused = {"eeg": eeg and off["eeg"],
+              "heart": heart and off["heart"] and off["camera"],
+              "emotion": emotion and off["camera"]}
+    return [ch for ch, is_paused in paused.items() if is_paused]
+
+
 # A zeroed tick, as a headband off the head sends: nothing refused it.
 _NO_USABLE_EEG = "no usable reading; check the headband is on"
 
@@ -1815,7 +1820,8 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                 "emotion_revoked_at": emotion_revoked_at,
                 "heart_revoked_at": heart_revoked_at,
                 "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at,
-                "paused_channels": _paused_channels(), **erased}
+                "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion),
+                **erased}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -1844,7 +1850,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # Consent, not an inclusion flag: the cognitive channel is always read.
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
-        "paused_channels": _paused_channels(),
+        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion),
         **erased,
     }
 
@@ -2540,7 +2546,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # EEG is always read, so no `eeg_included`; the tiles need these to say "Off since".
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
-        "paused_channels": _paused_channels(),
+        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion),
         "emotion_distribution": (dict(sorted(emotion_counts.items(),
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),

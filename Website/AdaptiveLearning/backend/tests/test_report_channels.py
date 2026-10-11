@@ -11,6 +11,8 @@ import main  # noqa: E402
 from tests.test_access_control import _FakeSupabase, _ts, _weekly_channels  # noqa: E402
 
 STUDENT = "student-1"
+# Saved before conftest's autouse fixture replaces it.
+_REAL_FEATURE_FLAGS = main._feature_flags
 
 
 def _consent_row(user_id=STUDENT, eeg=True, headband=True, camera=True):
@@ -628,3 +630,33 @@ def test_every_summary_payload_carries_the_erasure_fields_inside_its_window():
     for payload in (row, empty, full):
         assert {k: payload[k] for k in want} == want
     assert {k: main._shape_summary(None)[k] for k in want} == dict.fromkeys(want)
+
+
+# ── an administrator's switch is a state of its own ──────────────────────────
+
+@pytest.mark.parametrize("flag,channel", [("recording_eeg_enabled", "eeg"),
+                                          ("recording_heart_enabled", "heart"),
+                                          ("recording_camera_enabled", "emotion")])
+def test_a_switched_off_channel_is_named_in_both_report_payloads(monkeypatch, set_flag, flag, channel):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(_consent_row())))
+    assert main._shape_summary(None)["paused_channels"] == []
+    assert main._weekly_signal_report(STUDENT)["paused_channels"] == []
+
+    set_flag(flag, False)
+
+    # Consent is on throughout: the switch is not a consent change.
+    assert main._shape_summary({"focus": 0.5})["paused_channels"] == [channel]
+    weekly = main._weekly_signal_report(STUDENT)
+    assert weekly["paused_channels"] == [channel] and weekly["eeg_enabled"] is True
+
+
+def test_unreadable_flags_pause_nothing(monkeypatch):
+    """The real reader answers its declared defaults (all on) on a failed read: no tile claims a pause."""
+    class _Down:
+        def table(self, _name):
+            raise RuntimeError("flags down")
+    monkeypatch.setattr(main, "supabase", _Down())
+    monkeypatch.setattr(main, "_feature_flags", _REAL_FEATURE_FLAGS)
+    main._feature_flags_cache_clear()
+
+    assert main._paused_channels() == []

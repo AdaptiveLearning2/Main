@@ -14,7 +14,9 @@ import AccessibleChart from '../charts/AccessibleChart'
 import { seriesDot } from '../charts/roughDot'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
-import { calmPct, calmRatio, emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
+import {
+  calmPct, calmRatio, emotionOn, isPaused, offLabel, pausedNotice, pct, ratio, valueOrReason,
+} from '../../lib/signalFormat'
 import { AROUSAL_REASONS, MEASURES } from '../../lib/signalGlossary'
 
 // muse_optics / muse_ppg / rppg are storage values, not display strings.
@@ -51,6 +53,7 @@ function faceReason(report, faceOn) {
     consentRetrieved: report?.consent_retrieved,
     samples: report?.sample_counts?.face,
     erasedAt: report?.emotion_erased_at,
+    paused: isPaused(report, 'emotion'),
   }
 }
 
@@ -70,6 +73,7 @@ function eegReason(report) {
       ? false : report?.consent_retrieved,
     samples: report?.sample_counts?.cognitive,
     erasedAt: report?.eeg_erased_at,
+    paused: isPaused(report, 'eeg'),
   }
 }
 
@@ -82,6 +86,7 @@ function heartReason(report) {
       ? false : report?.consent_retrieved,
     samples: report?.sample_counts?.heart,
     erasedAt: report?.heart_erased_at,
+    paused: isPaused(report, 'heart'),
   }
 }
 
@@ -342,6 +347,9 @@ export function WeeklySignalReport({ report, title = 'This week' }) {
             Consent settings could not be read, so heart and facial data were left out of this report — that is not a record of what was permitted.
           </p>
         )}
+        {pausedNotice(report?.paused_channels) && (
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{pausedNotice(report.paused_channels)}</p>
+        )}
         {/* An average can mix both score scales with no visible step. */}
         <ScaleNote scale={avg.score_scale} what="The averages below" />
       </div>
@@ -440,6 +448,7 @@ export function WeeklySignalReport({ report, title = 'This week' }) {
               revokedAt: report?.heart_revoked_at,
               consentRetrieved: report?.consent_retrieved,
               samples: report?.sample_counts?.heart,
+              paused: isPaused(report, 'heart'),
             })}
           </p>
         </div>

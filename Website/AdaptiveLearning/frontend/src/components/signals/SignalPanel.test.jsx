@@ -95,6 +95,33 @@ describe('WeeklySignalReport', () => {
     }
   })
 
+  it('says Paused by the school where an administrator switched EEG off, and names it once', () => {
+    const paused = {
+      ...report, paused_channels: ['eeg'], eeg_enabled: true,
+      averages: { ...report.averages, focus: null, stress: null },
+      highlights: { ...report.highlights, highest_stress: null, lowest_focus: null },
+      sample_counts: { ...report.sample_counts, cognitive: 0 },
+    }
+    render(<WeeklySignalReport report={paused} />)
+    for (const label of ['Focus', 'Calm', 'Lowest calm reading', 'Lowest focus reading']) {
+      expect(metric(label).getByText('Paused by the school')).toBeInTheDocument()
+    }
+    expect(screen.getByText(/focus and calm is paused by the school/i)).toBeInTheDocument()
+    expect(screen.queryByText('No sensor', VISIBLE)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Off since/, VISIBLE)).not.toBeInTheDocument()
+  })
+
+  it('keeps a figure that exists while the notice says nothing new is being taken', () => {
+    render(<WeeklySignalReport report={{ ...report, paused_channels: ['eeg'] }} />)
+    expect(metric('Calm').getByText('69%')).toBeInTheDocument()
+    expect(screen.getByText(/no new readings are being taken/i)).toBeInTheDocument()
+  })
+
+  it('claims no pause when the payload predates the field or lists none', () => {
+    render(<WeeklySignalReport report={{ ...report, paused_channels: [] }} />)
+    expect(screen.queryByText(/paused by the school/i)).not.toBeInTheDocument()
+  })
+
   it('calls a failed EEG read unavailable, not No sensor', () => {
     // The failed read's counts are zero, which alone reads as a headband never worn.
     const failed = {

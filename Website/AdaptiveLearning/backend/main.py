@@ -3171,6 +3171,11 @@ def _claim_generation_slot(user_id: str) -> bool:
                for limiter in (_GENERATION_LIMITER, _PREFETCH_DAILY_LIMITER))
 
 
+def _count_generation_failure(reason: str) -> None:
+    """Engine's failure count: a question that never reached the student, whatever the model call said."""
+    ops_metrics.bump("question", f"generation_failed:{reason}")
+
+
 def _admit_generation(user_id: str, generating: bool = True):
     """Count one served question and return its refund, or record the refusal and raise 429.
 
@@ -3613,9 +3618,11 @@ def generate_question(
                     # Re-raised as the 500 it always was; logged so the failure has a cause on record.
                     print(f"[generate] failed for {user_id[:8]} at {effective_grade!r}, bias {manual_bias}: "
                           f"{type(e).__name__}: {e}")
+                    _count_generation_failure(type(e).__name__)
                     raise
             if not question:
                 print(f"[generate] the decider returned no question for {user_id[:8]} at {effective_grade!r}")
+                _count_generation_failure("NoQuestion")
                 raise HTTPException(500, "Failed to generate question")
         except Exception:
             # No question reached the student, so it does not count against their day.
@@ -3942,7 +3949,13 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
             except llm_client.GenerationUnavailable as e:
                 print(f"[practice] generation refused for {user['id'][:8]}: {e}")
                 raise HTTPException(503, "Question generation is temporarily unavailable.")
+            except Exception as e:
+                print(f"[practice] generation failed for {user['id'][:8]} on {topic!r}: "
+                      f"{type(e).__name__}: {e}")
+                _count_generation_failure(type(e).__name__)
+                raise
         if not question:
+            _count_generation_failure("NoQuestion")
             raise HTTPException(500, "Failed to generate question")
     except Exception:
         # As /api/generate-question: a question that never arrived is not charged.
@@ -3952,6 +3965,7 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
     # Same deduplicating storage as the live path, so identical questions share one row.
     LLM_topic_decider._attach_stored_id(question, session["difficulty"])
     question["difficulty"] = session["difficulty"]
+    ops_metrics.bump("question", "served:practice")
     return question
 
 
@@ -9509,6 +9523,13 @@ def admin_today(request: Request):
         if not _missing_rpc(e, "admin_today", "20261010000000",
                             "the admin Today strip reads nothing until then"):
             print(f"[admin:today] {e}")
+    # The RPC's `answers` is adaptive sessions only; practice answers live in their own table.
+    practice_answers = None
+    try:
+        practice_answers = supabase.table("practice_session_answers").select("id", count="exact") \
+            .not_.is_("correct", "null").gte("answered_at", since.isoformat()).limit(1).execute().count
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[admin:today] practice answers: {e}")
     discards = ops_metrics.read(supabase, ["session_discarded"], since=since)
     discarded: dict[str, int] = {}
     for r in discards["rows"]:
@@ -9518,6 +9539,7 @@ def admin_today(request: Request):
         "timezone": _school_timezone_name(),
         "retrieved": isinstance(counts, dict),
         "counts": counts if isinstance(counts, dict) else None,
+        "practice_answers": practice_answers,
         "discarded": discarded,
         "discarded_retrieved": discards["retrieved"],
     }

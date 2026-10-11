@@ -8,12 +8,15 @@ const POLL_MS = 60_000
 function Counts({ data }) {
   if (!data.retrieved) return <Unread what="Today's session counts" />
   const c = data.counts
+  const practiceAnswers = data.practice_answers
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Tile label="Lessons started" value={c.started} />
         <Tile label="Open now" value={c.open_now} hint="any day, not ended yet" />
-        <Tile label="Answers" value={c.answers} />
+        <Tile label="Answers" value={c.answers + (practiceAnswers ?? 0)}
+              hint={practiceAnswers == null ? 'adaptive only: practice could not be read'
+                : `${c.answers} adaptive, ${practiceAnswers} practice`} />
         <Tile label="Students active" value={c.active_students} />
       </div>
       <p className="text-xs text-gray-600 dark:text-gray-400">

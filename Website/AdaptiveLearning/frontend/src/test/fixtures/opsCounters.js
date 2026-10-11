@@ -14,7 +14,10 @@ export function buildGeneration(over = {}) {
     tokens: { 'claude:in': 80000, 'claude:out': 12000 },
     estimated_cost_usd: 0.14,
     prices_per_mtok: { input: 1.0, output: 5.0 },
-    questions: { 'served:inline': 5, 'served:queue': 15, prefetched: 16, prefetch_failed: 2 },
+    questions: {
+      'served:inline': 5, 'served:queue': 15, 'served:practice': 6,
+      'generation_failed:ValueError': 2, prefetched: 16, prefetch_failed: 2,
+    },
     hourly: [{ hour: '2026-10-08T14:00:00+00:00', ok: 40, failed: 4 }],
     daily_ceiling: { used: 44, limit: 2500, scope: 'this server process' },
     complete: true,

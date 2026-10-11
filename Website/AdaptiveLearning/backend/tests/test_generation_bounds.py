@@ -307,6 +307,33 @@ def test_a_generation_that_genuinely_failed_is_still_a_500(monkeypatch):
     assert exc.value.status_code == 500
 
 
+def test_a_generator_that_raised_is_counted_as_a_question_not_made(monkeypatch):
+    """Engine's failure count: the model call may have been ok, the question still never arrived."""
+    import ops_metrics
+
+    def _gave_up(*_a, **_k):
+        raise ValueError("Failed to generate valid JSON after retries")
+
+    with pytest.raises(ValueError):
+        _generate(monkeypatch, decider=_gave_up)
+    with pytest.raises(HTTPException):
+        _generate(monkeypatch, decider=lambda *_a, **_k: None)
+
+    assert ops_metrics.pending() == {("question", "generation_failed:ValueError"): 1,
+                                     ("question", "generation_failed:NoQuestion"): 1}
+
+
+def test_a_served_question_is_counted_and_a_ceiling_refusal_is_not_a_failure(monkeypatch):
+    import ops_metrics
+
+    _generate(monkeypatch, decider=lambda *_a, **_k: {"question_text": "2+2"})
+    with pytest.raises(HTTPException):
+        _generate(monkeypatch, decider=lambda *_a, **_k: (_ for _ in ()).throw(
+            llm_client.GenerationUnavailable("ceiling")))
+
+    assert ops_metrics.pending() == {("question", "served:inline"): 1}
+
+
 def test_the_rate_limited_student_gets_a_429_with_a_retry_after(monkeypatch):
     tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     called = []

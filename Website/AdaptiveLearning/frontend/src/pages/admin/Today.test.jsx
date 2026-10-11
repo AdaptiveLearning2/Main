@@ -15,10 +15,18 @@ beforeEach(() => {
 describe("today's counts", () => {
   it('shows what was asked of the backend and its counts', async () => {
     render(<Today />)
-    expect(await screen.findByText('214')).toBeInTheDocument()
+    expect(await screen.findByText('250')).toBeInTheDocument()   // 214 adaptive + 36 practice
+    expect(screen.getByText('214 adaptive, 36 practice')).toBeInTheDocument()
     expect(screen.getByText('12')).toBeInTheDocument()
     expect(screen.getByText(/America\/Chicago/)).toBeInTheDocument()
     expect(apiFetch).toHaveBeenCalledWith(TODAY_PATH)
+  })
+
+  it('says the answer count is adaptive only when practice answers could not be read', async () => {
+    overrideApi(TODAY_PATH, () => buildToday({ practice_answers: null }))
+    render(<Today />)
+    expect(await screen.findByText('214')).toBeInTheDocument()
+    expect(screen.getByText('adaptive only: practice could not be read')).toBeInTheDocument()
   })
 
   it('says teacher and parent activity is not recorded rather than showing a zero', async () => {

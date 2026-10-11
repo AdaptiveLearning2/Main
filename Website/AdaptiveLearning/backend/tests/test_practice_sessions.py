@@ -350,6 +350,28 @@ def test_question_that_genuinely_failed_is_a_500(_client, monkeypatch):
     assert exc.value.status_code == 500
 
 
+def test_practice_questions_are_counted_served_and_failures_are_counted_not_made(_client, monkeypatch):
+    import ops_metrics
+
+    _as(monkeypatch, USER)
+    _client(sessions=[_OWNED_SESSION])
+    monkeypatch.setattr(main.LLM_topic_decider, "_attach_stored_id", lambda q, d: q)
+    monkeypatch.setattr(main.LLM_topic_decider, "question_generation",
+                        lambda *_a, **_k: {"question_text": "2 + 2?"})
+    main.practice_question(SESSION, None)
+    assert ops_metrics.pending() == {("question", "served:practice"): 1}
+
+    ops_metrics.reset()
+
+    def _gave_up(*_a, **_k):
+        raise ValueError("Failed to generate valid JSON after retries")
+
+    monkeypatch.setattr(main.LLM_topic_decider, "question_generation", _gave_up)
+    with pytest.raises(ValueError):
+        main.practice_question(SESSION, None)
+    assert ops_metrics.pending() == {("question", "generation_failed:ValueError"): 1}
+
+
 def test_question_generates_from_the_sessions_own_settings_and_stores_it(_client, monkeypatch):
     """Asserts the exact arguments reaching `question_generation`, not just that a question came back."""
     _as(monkeypatch, USER)

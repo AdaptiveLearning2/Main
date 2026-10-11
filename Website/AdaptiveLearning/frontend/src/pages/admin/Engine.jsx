@@ -69,7 +69,14 @@ function generationTotals(d) {
   const ok = sum(entries.filter(([k]) => k.endsWith(':ok')).map(([, n]) => n))
   const failed = sum(entries.filter(([k]) => !k.endsWith(':ok')).map(([, n]) => n))
   const q = d.questions || {}
-  return { ok, failed, served: (q['served:inline'] || 0) + (q['served:queue'] || 0) }
+  const served = (q['served:inline'] || 0) + (q['served:queue'] || 0) + (q['served:practice'] || 0)
+  return { ok, failed, served, notServed: generationFailures(q).reduce((a, [, n]) => a + n, 0) }
+}
+
+// Questions that never reached a student, counted where the generator gave up: a reply it rejected
+// is an ok model call, so `outcomes` cannot show it.
+function generationFailures(q) {
+  return Object.entries(q).filter(([k]) => k.startsWith('generation_failed:'))
 }
 
 // Only Claude calls have a ceiling; under Ollama the payload sends none.
@@ -93,10 +100,11 @@ export function GenerationSummary() {
     <div className="space-y-2">
       <OpsState res={res} what="generation counts">
         {data => {
-          const { ok, failed, served } = generationTotals(data)
+          const { ok, failed, served, notServed } = generationTotals(data)
           return (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Tile label="Questions served, 24 h" value={served} />
+              <Tile label="Questions not made, 24 h" value={notServed} />
               <Tile label="Model calls ok" value={ok} />
               <Tile label="Model calls failed" value={failed} />
               <CeilingTile ceiling={data.daily_ceiling} />
@@ -154,12 +162,13 @@ function RefusalTable({ rows }) {
 }
 
 function GenerationDetail({ data }) {
-  const { ok, failed, served } = generationTotals(data)
+  const { ok, failed, served, notServed } = generationTotals(data)
   const failures = Object.entries(data.outcomes || {}).filter(([k]) => !k.endsWith(':ok'))
   const waits = Object.entries(data.waits || {})
   const tokens = data.tokens || {}
   const q = data.questions || {}
-  const nothing = ok + failed === 0 && served === 0
+  const notMade = generationFailures(q)
+  const nothing = ok + failed === 0 && served === 0 && notServed === 0
 
   return (
     <div className="space-y-3">
@@ -168,7 +177,10 @@ function GenerationDetail({ data }) {
       )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Tile label="Questions served" value={served}
-              hint={`${q['served:queue'] || 0} from the queue, ${q['served:inline'] || 0} made on the spot`} />
+              hint={`${q['served:queue'] || 0} from the queue, ${q['served:inline'] || 0} made on the spot, `
+                + `${q['served:practice'] || 0} practice`} />
+        <Tile label="Questions not made" value={notServed}
+              hint="the generator gave up, even if the model call was ok" />
         <Tile label="Model calls ok" value={ok} />
         <Tile label="Model calls failed" value={failed} />
         <CeilingTile ceiling={data.daily_ceiling} />
@@ -187,6 +199,15 @@ function GenerationDetail({ data }) {
           {failures.map(([key, n]) => (
             <li key={key} className="text-gray-900 dark:text-white">
               <span className="tabular-nums font-bold">{n}</span> × {outcomeLabel(key)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {notMade.length > 0 && (
+        <ul className="text-sm space-y-1">
+          {notMade.map(([key, n]) => (
+            <li key={key} className="text-gray-900 dark:text-white">
+              <span className="tabular-nums font-bold">{n}</span> × not made: {key.slice('generation_failed:'.length)}
             </li>
           ))}
         </ul>

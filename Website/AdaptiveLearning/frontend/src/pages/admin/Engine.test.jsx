@@ -24,9 +24,10 @@ const section = name => screen.getByRole('heading', { name }).closest('section')
 describe('question generation', () => {
   it('asks for the last 24 hours and shows the totals and the ceiling it was given', async () => {
     page()
-    expect(await screen.findByText('20')).toBeInTheDocument()   // 5 inline + 15 queued
+    expect(await screen.findByText('26')).toBeInTheDocument()   // 5 inline + 15 queued + 6 practice
 
     const gen = section('Question generation')
+    expect(within(gen).getByText(/6 practice/)).toBeInTheDocument()
     expect(within(gen).getByText('40')).toBeInTheDocument()
     expect(within(gen).getByText('4')).toBeInTheDocument()
     expect(within(gen).getByText('44 / 2500')).toBeInTheDocument()
@@ -40,6 +41,18 @@ describe('question generation', () => {
     expect(await screen.findByText(/daily call ceiling reached/)).toBeInTheDocument()
     expect(screen.getByText(/error: ValueError/)).toBeInTheDocument()
     expect(screen.queryByText(/claude:unavailable/)).not.toBeInTheDocument()
+  })
+
+  it('counts a rejected reply as a question not made, though every model call was ok', async () => {
+    overrideApi(GENERATION_PATH, () => buildGeneration({
+      outcomes: { 'claude:ok': 40 }, questions: { 'served:inline': 5, 'generation_failed:ValueError': 2 },
+    }))
+    page()
+    const gen = section('Question generation')
+    expect(await within(gen).findByText(/not made: ValueError/)).toHaveTextContent('2 × not made: ValueError')
+    const tile = within(gen).getByText('Questions not made').closest('div')
+    expect(within(tile).getByText('2')).toBeInTheDocument()
+    expect(within(gen).getByText('Model calls failed').closest('div')).toHaveTextContent('0')
   })
 
   it('says a quiet day was read, rather than showing zeros alone', async () => {
@@ -58,7 +71,7 @@ describe('question generation', () => {
   it('shows no cost when the provider bills nothing', async () => {
     overrideApi(GENERATION_PATH, () => buildGeneration({ provider: 'ollama', model: null }))
     page()
-    await screen.findByText('20')
+    await screen.findByText('26')
     expect(screen.queryByText(/Estimated cost/)).not.toBeInTheDocument()
   })
 })
@@ -130,7 +143,7 @@ describe('what the counts can and cannot say', () => {
   it('shows no call ceiling where none applies', async () => {
     overrideApi(GENERATION_PATH, () => buildGeneration({ provider: 'ollama', model: null, daily_ceiling: null }))
     page()
-    await screen.findByText('20')
+    await screen.findByText('26')
     expect(screen.queryByText(/Daily call ceiling/)).not.toBeInTheDocument()
   })
 

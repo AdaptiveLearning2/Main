@@ -1140,6 +1140,26 @@ describe('ChartSummaryPanel and "Hide sensor data"', () => {
     expect(screen.queryByText('4')).not.toBeInTheDocument()
   })
 
+  it('leaves hidden sensor reads out of its "couldn\'t be loaded" note', () => {
+    const retrieved = { signals: false, trend: false, stats: false, topics: true }
+    const { unmount } = render(<ChartSummaryPanel summary={summary} sensorLines={[1, 2]} hideSensorLines
+                                                  retrieved={retrieved} onGenerate={() => {}} />)
+    const note = screen.getByText(/couldn’t be loaded/)
+    expect(note).toHaveTextContent('the practice totals')
+    expect(note).not.toHaveTextContent(/signal averages|term trend/)
+    unmount()
+    // Shown, they are named.
+    render(<ChartSummaryPanel summary={summary} sensorLines={[1, 2]} retrieved={retrieved} onGenerate={() => {}} />)
+    expect(screen.getByText(/couldn’t be loaded/)).toHaveTextContent(/signal averages, the term trend, the practice totals/)
+  })
+
+  it('says nothing failed when only hidden sensor reads did', () => {
+    render(<ChartSummaryPanel summary={summary} sensorLines={[1, 2]} hideSensorLines
+                              retrieved={{ signals: false, trend: false, stats: true, topics: true }}
+                              onGenerate={() => {}} />)
+    expect(screen.queryByText(/couldn’t be loaded/)).not.toBeInTheDocument()
+  })
+
   it('shows every sentence when sensor data is not hidden', () => {
     render(<ChartSummaryPanel summary={summary} sensorLines={[1, 2]} onGenerate={() => {}} />)
     expect(screen.getByText(/Average focus/)).toBeInTheDocument()

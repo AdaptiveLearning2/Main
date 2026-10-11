@@ -565,9 +565,10 @@ export function ChartSummaryPanel({ summary, source, retrieved, loading, error, 
                                     hideSensorLines = false }) {
   const forTeacher = viewerRole === 'teacher'
   // `=== false`, not falsy: absent on older payloads.
+  // Sensor reads go unnamed while their sentences are hidden.
   const missing = [
-    retrieved?.signals === false && 'this week’s signal averages',
-    retrieved?.trend === false && 'the term trend',
+    !hideSensorLines && retrieved?.signals === false && 'this week’s signal averages',
+    !hideSensorLines && retrieved?.trend === false && 'the term trend',
     retrieved?.stats === false && 'the practice totals',
     retrieved?.topics === false && 'the topic figures',
   ].filter(Boolean)

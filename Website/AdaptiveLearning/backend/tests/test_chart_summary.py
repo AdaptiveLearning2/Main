@@ -628,10 +628,16 @@ def test_a_no_figure_point_may_ask_whether_without_stating_a_level(line):
     assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
 
 
-def test_a_hedge_does_not_cover_a_level_stated_before_it():
+@pytest.mark.parametrize("line", [
+    "Body arousal was raised, though we cannot say whether it was higher than usual.",
+    "Body arousal cannot be compared, so we cannot say whether it changed, but it was raised this week.",
+    "We cannot say whether body arousal changed against earlier days; it was higher than usual this week.",
+    "We cannot say whether body arousal changed against earlier days. It was higher than usual this week.",
+], ids=["before", "after-but", "after-semicolon", "after-full-stop"])
+def test_a_hedge_covers_only_its_own_clause(line):
+    """A level stated before or after the hedge still states a measurement that does not exist."""
     base = ("Body arousal cannot be compared with earlier days, because this period's heart readings "
             "came from more than one sensor.")
-    line = "Body arousal was raised, though we cannot say whether it was higher than usual."
     assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) is None
 
 

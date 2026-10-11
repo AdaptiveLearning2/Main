@@ -5668,7 +5668,9 @@ _READINGS_WORD = re.compile(r"\breadings?\b", re.IGNORECASE)
 _FIGURE_WORDS = re.compile(r"\d|\b(raised|elevated|high|higher|highest|low|lower|lowest|above|below|rose|risen|"
                            r"fell|dropped|than usual)\b", re.IGNORECASE)
 # Asks rather than states: "whether it was higher…", "higher or lower". Removed before that check.
-_HEDGE = re.compile(r"\bwhether\b.*$|\b(higher|lower|above|below|more|less)\s+or\s+(higher|lower|above|below|more|less)\b",
+# "whether…" ends at the next , ; . or "but", so a level stated after it is still checked.
+_HEDGE = re.compile(r"\bwhether\b.*?(?=[,;.]|\bbut\b|$)"
+                    r"|\b(higher|lower|above|below|more|less)\s+or\s+(higher|lower|above|below|more|less)\b",
                     re.IGNORECASE)
 _TIME_SHARE = re.compile(
     r"\b(how often|often|time spent|spent)\b"

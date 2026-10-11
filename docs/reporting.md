@@ -624,14 +624,21 @@ two impossible — the same reason `AccessibleChart` drives its sentence and tab
 and the comparison with the child's usual is in words only, so it adds no number. `_validated_chart_summary` rejects a
 reply line that says "stress" where the matching rule-based line does not. `basis.sensor_lines` indexes the sensor
 sentences so "Hide sensor data" can drop exactly those, and the validator enforces the order that relies on: each
-reply line may use only its own point's numbers, and is a sensor line exactly when its point is. Body arousal is a
-share of readings, so a rewording of its defining point must keep "readings", and no body-arousal line may add
-"how often", "often", "time spent", "spent", or an amount put on the lesson itself ("0% of the lesson", "more of
-the lesson"; "of the lesson's readings" is fine) (`_arousal_reworded_as_time`). This binds points that state a body-arousal
-figure or verdict (`_AROUSAL_FIGURE`), whatever the rewording names, and a line that brings body arousal into a point
-that never mentioned it; the "no figure yet" points use "often" and "most of the lesson" in their own sense. Requiring the word, rather than listing
-time phrasings, is deliberate: every list missed the next phrasing. The cost is that a line dropping the definition
-falls back to the rule-based text.
+reply line may use only its own point's numbers, and is a sensor line exactly when its point is.
+
+**Body arousal is a share of readings, and `_misstates_body_arousal` holds a rewording to that**, by the kind of point
+(each one naming "body arousal"):
+- **its figure** ("share of…"): the line keeps "readings" and adds no time phrase (`_TIME_SHARE`: "how often", "often",
+  "time spent", "spent", or an amount put on the lesson itself, "0% of the lesson", "more of the lesson"; "of the
+  lesson's usable heart readings" is fine). Requiring the word rather than listing time phrasings is deliberate: every
+  list missed the next one. The cost is that a line dropping the definition falls back to the rule-based text.
+- **a verdict** ("body arousal was higher than usual"): only the body-arousal clause is checked for time phrases, so
+  "focus often dipped" beside it passes.
+- **no figure** (calibrating, unsteady, not enough history, lesson in progress): no time check, since "often" and "most
+  of the lesson" mean other things there, but the line may not gain a level or comparison (`_FIGURE_WORDS`): "was
+  raised" where there is no figure states a measurement that does not exist.
+
+A line that brings body arousal into a point that never mentioned it is checked for time phrases too.
 
 **What it still does not check is a number's meaning within one point.** A reply that relabels a figure inside its
 own sentence uses only that sentence's numbers and passes. That is the residual hallucination risk on this endpoint and it

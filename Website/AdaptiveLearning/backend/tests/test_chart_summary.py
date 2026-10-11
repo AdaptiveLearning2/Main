@@ -608,6 +608,30 @@ def test_a_point_with_no_body_arousal_figure_may_say_often_or_most_of_the_lesson
     assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
 
 
+def test_a_no_figure_point_cannot_gain_a_level_or_comparison():
+    """Saying arousal was raised when there is no figure states a measurement that does not exist."""
+    base = main._BODY_AROUSAL_ABSENT["unusable"]
+    bad = ("Body arousal was raised for most of the lesson, but the heart readings were too "
+           "unsteady to give a figure.")
+    good = "Body arousal has no figure for this period: the heart readings were not steady enough to use."
+    assert main._validated_chart_summary(f"1. {bad}", set(), 1, [base]) is None
+    assert main._validated_chart_summary(f"1. {good}", set(), 1, [base]) == [good]
+
+
+def test_only_the_body_arousal_clause_of_a_verdict_is_checked_for_time():
+    base = ("Compared with this student's own earlier days, focus was lower than usual "
+            "and body arousal was higher than usual.")
+    line = "Next to their earlier days, focus often dipped below usual and body arousal was higher than usual."
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+
+
+def test_a_share_of_something_else_is_not_body_arousal():
+    """A later "share of …" sentence must not make every summary fall back for lacking "readings"."""
+    base = "The share of questions answered correctly this week was 75%."
+    line = "Three quarters of this week's questions, 75%, were answered correctly."
+    assert main._validated_chart_summary(f"1. {line}", {75.0}, 1, [base]) == [line]
+
+
 def test_a_line_that_brings_in_body_arousal_is_still_checked():
     # A sensor point, so the sensor-word check passes it and only this rule decides.
     base = "Average focus is 58%, and it held steady across the weeks."

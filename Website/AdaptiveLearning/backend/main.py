@@ -5661,31 +5661,43 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
 _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
 # Body arousal is a share of readings: a rewording of its definition keeps that word, and no
-# body-arousal line says how often or time spent. Absent-state points define nothing, so need no "readings".
+# body-arousal figure or verdict is restated as time. See docs/reporting.md, "Chart summary".
 _DEFINES_SHARE = re.compile(r"\bshare of\b", re.IGNORECASE)
 _READINGS_WORD = re.compile(r"\breadings?\b", re.IGNORECASE)
+# A level or a comparison: what a "no figure" point must not gain.
+_FIGURE_WORDS = re.compile(r"\d|\b(raised|elevated|high|higher|highest|low|lower|lowest|above|below|rose|risen|"
+                           r"fell|dropped|than usual)\b", re.IGNORECASE)
 _TIME_SHARE = re.compile(
     r"\b(how often|often|time spent|spent)\b"
     # An amount put on the lesson itself ("0% of the lesson", "more of the lesson"), not on its readings.
     r"|(%|\b(percent|more|less|most|much|fraction|proportion|share))\s+of\s+((the|each|a|their)\s+)?"
     r"(time|lesson|session)s?\b(?!s?['’]s?\s+(\w+\s+){0,3}readings?\b)",
     re.IGNORECASE)
-# Points that state a body-arousal figure or verdict; the "no figure yet" ones may say "often"
-# or "most of the lesson" in their own sense.
+# With "body arousal" named in the point: its figure ("share of") or a verdict on it.
 _AROUSAL_FIGURE = re.compile(r"\bshare of\b|\bbody arousal was\b", re.IGNORECASE)
+_CLAUSES = re.compile(r"[,;:]|\band\b|\bbut\b", re.IGNORECASE)
 
 
-def _arousal_reworded_as_time(line: str, base: str) -> bool:
-    """A body-arousal line that drops its definition's "readings", or adds a time phrase its point lacked.
+def _adds(pattern: re.Pattern, text: str, base: str) -> bool:
+    return bool(pattern.search(text)) and not pattern.search(base)
 
-    Checked where the point states a figure or verdict (a rewording may drop the name), or where the
-    line names body arousal and its point did not mention it at all.
+
+def _misstates_body_arousal(line: str, base: str) -> bool:
+    """A rewording that turns body arousal into time, drops its "readings", or invents a figure.
+
+    Figure point: keeps "readings" and gains no time phrase. Verdict point: only the body-arousal
+    clause is checked for time. No-figure point: gains no level or comparison.
     """
-    if not (_AROUSAL_FIGURE.search(base)
-            or ("arousal" in line.lower() and "arousal" not in base.lower())):
-        return False
-    return (bool(_DEFINES_SHARE.search(base)) and not _READINGS_WORD.search(line)) \
-        or (bool(_TIME_SHARE.search(line)) and not _TIME_SHARE.search(base))
+    names = "body arousal" in base.lower()
+    if names and _DEFINES_SHARE.search(base):
+        return not _READINGS_WORD.search(line) or _adds(_TIME_SHARE, line, base)
+    if names and _AROUSAL_FIGURE.search(base):
+        clauses = [c for c in _CLAUSES.split(line) if "arousal" in c.lower()] or [line]
+        return any(_adds(_TIME_SHARE, c, base) for c in clauses)
+    if names:
+        return _adds(_FIGURE_WORDS, line, base)
+    # A line bringing body arousal into a point that never mentioned it.
+    return "arousal" in line.lower() and "arousal" not in base.lower() and _adds(_TIME_SHARE, line, base)
 
 
 def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
@@ -5712,9 +5724,9 @@ def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
                                     for line, base in zip(lines, baseline)):
         print("[chart_summary:llm] rejected: it says stress where the point did not")
         return None
-    if baseline is not None and any(_arousal_reworded_as_time(line, base)
+    if baseline is not None and any(_misstates_body_arousal(line, base)
                                     for line, base in zip(lines, baseline)):
-        print("[chart_summary:llm] rejected: it describes body arousal as a share of time")
+        print("[chart_summary:llm] rejected: it misstates body arousal (time, definition or figure)")
         return None
     # Each point keeps its own numbers and stays a sensor point or not, so `sensor_lines` holds.
     if baseline is not None and any(

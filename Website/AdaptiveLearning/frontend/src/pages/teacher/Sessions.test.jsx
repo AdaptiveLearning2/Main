@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
@@ -201,6 +201,22 @@ it('does not flash "no sessions yet" between a successful retry and the roster',
 
   releaseRoster(classSessions(ROSTER))
   await waitFor(() => expect(screen.queryByText(EMPTY)).not.toBeInTheDocument())
+})
+
+it('keeps the list when the class already shown is picked again', async () => {
+  wire({ students: { a: [SESSION], b: [] } })
+  draw()
+  expect(await screen.findByText('Ada')).toBeInTheDocument()
+  const rosterReads = () => apiFetch.mock.calls.filter(([p]) => p.endsWith('/sessions')).length
+  expect(rosterReads()).toBe(1)
+
+  // A script or assistive tool can dispatch `change` with the value already selected.
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c1' } })
+
+  expect(screen.getByText('Ada')).toBeInTheDocument()
+  await new Promise(r => setTimeout(r, 0))
+  expect(screen.getByText('Ada')).toBeInTheDocument()
+  expect(rosterReads()).toBe(1)
 })
 
 it('does not let a slow class roster repaint the list under a newer class', async () => {

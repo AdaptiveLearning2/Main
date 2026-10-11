@@ -550,10 +550,16 @@ _AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readi
     "Body arousal -- 0% of each lesson was at least 10 beats a minute above the start.",
     "Body arousal -- 0% of the session was at least 10 beats a minute above the start.",
     "Body arousal -- 0% of lesson time was at least 10 beats a minute above the start.",
+    # A possessive followed by a time word is still a share of time.
+    "Body arousal -- 0% of the lesson’s time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0 percent of each lesson's time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the session's length was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the lessons' duration was at least 10 beats a minute above the start.",
     "Body arousal -- 0% of time spent at least 10 beats a minute above the start.",
     "Body arousal -- 0%, the lesson spent well above 10 beats a minute over the start.",
 ], ids=["how-often", "often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
         "of-each-lesson", "of-the-session", "of-lesson-time",
+        "lessons-time", "each-lessons-time", "sessions-length", "plural-lessons-duration",
         "time-spent", "spent-above"])
 def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     """It is a share of readings; a time-share reading is the claim the glossary removed."""
@@ -573,8 +579,10 @@ def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     "-- was 0%.",
     "Body arousal -- the share of the session’s readings at least 10 beats a minute above the start "
     "-- was 0%.",
+    "Body arousal -- the share of the lessons’ readings at least 10 beats a minute above the start "
+    "-- was 0%.",
 ], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson",
-        "lessons-readings-straight", "sessions-readings-curly"])
+        "lessons-readings-straight", "sessions-readings-curly", "plural-lessons-readings"])
 def test_a_faithful_body_arousal_rephrasing_passes(line):
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
 

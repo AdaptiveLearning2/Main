@@ -5661,8 +5661,10 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
 _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
 # Body arousal counts readings; time words turn it back into the time-share it is not.
+# A possessive ("the lesson's / lessons' readings") is exempt unless a time word follows it.
 _TIME_SHARE = re.compile(r"\b(how often|often|time spent|spent)\b"
-                         r"|(%|\bpercent|\bshare)\s+of\s+((the|each|a|their)\s+)?(time|lesson|session)s?\b(?!['’]s\b)",
+                         r"|(%|\bpercent|\bshare)\s+of\s+((the|each|a|their)\s+)?(time|lesson|session)(s\b|\b)"
+                         r"(?!(['’]s|['’])\s+(?!(time|duration|length)\b)\w)",
                          re.IGNORECASE)
 
 

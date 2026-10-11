@@ -729,14 +729,12 @@ def question_generation(topic, difficulty, user_id, grade):
 def generate_with_fallback(topic, difficulty, user_id, grade, alternatives):
     """`question_generation`, then one try at the first of `alternatives` if the generator gives up.
 
-    A refused request (`GenerationUnavailable`) is never retried. A question made from another topic
-    carries `fallback_from`; the last failure is re-raised.
+    Only a generator rejecting its own output (`ValueError`) is retried: a ceiling, timeout or bad key
+    would just fail again, slower. A question made from another topic carries `fallback_from`.
     """
     try:
         return question_generation(topic, difficulty, user_id, grade)
-    except llm_client.GenerationUnavailable:
-        raise
-    except Exception as e:                                     # noqa: BLE001
+    except ValueError as e:
         if not alternatives:
             raise
         print(f"[generate] {topic!r} failed ({type(e).__name__}: {e}); trying {alternatives[0]!r}")

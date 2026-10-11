@@ -60,11 +60,23 @@ def test_a_question_that_arrives_first_time_makes_no_second_call(monkeypatch):
 
 
 def test_the_last_failure_is_raised_when_the_alternative_fails_too(monkeypatch):
-    calls = _script(monkeypatch, [_gave_up(), RuntimeError("second")])
+    calls = _script(monkeypatch, [_gave_up(), ValueError("second")])
 
-    with pytest.raises(RuntimeError, match="second"):
+    with pytest.raises(ValueError, match="second"):
         td.generate_with_fallback("mode", "easy", "u", "6th Grade", ["median"])
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("30 s"), ConnectionError("down"),
+                                     RuntimeError("401 bad key")])
+def test_a_provider_failure_is_not_retried_in_another_topic(monkeypatch, failure):
+    """A timeout would cost the student a second wait; a bad key fails again."""
+    calls = _script(monkeypatch, [failure, None])
+
+    with pytest.raises(type(failure)):
+        td.generate_with_fallback("mode", "easy", "u", "6th Grade", ["median"])
+    assert len(calls) == 1
+    assert ops_metrics.pending() == {}
 
 
 def test_a_ceiling_refusal_is_never_retried(monkeypatch):

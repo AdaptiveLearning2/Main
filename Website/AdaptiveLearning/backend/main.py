@@ -3634,8 +3634,11 @@ def generate_question(
                     print(f"[generate] failed for {user_id[:8]} at {effective_grade!r}, bias {manual_bias}: "
                           f"{type(e).__name__}: {e}")
                     _count_generation_failure(type(e).__name__)
-                    # 503, not 500: the generator and its fallback both gave up, and a retry may succeed.
-                    raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
+                    # 503 only when the generator and its fallback both rejected their own output;
+                    # anything else (a key, a crash) stays the 500 it was.
+                    if isinstance(e, ValueError):
+                        raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
+                    raise
             if not question:
                 print(f"[generate] the decider returned no question for {user_id[:8]} at {effective_grade!r}")
                 _count_generation_failure("NoQuestion")
@@ -3972,7 +3975,9 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
                 print(f"[practice] generation failed for {user['id'][:8]} on {topic!r}: "
                       f"{type(e).__name__}: {e}")
                 _count_generation_failure(type(e).__name__)
-                raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
+                if isinstance(e, ValueError):
+                    raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
+                raise
         if not question:
             _count_generation_failure("NoQuestion")
             raise HTTPException(500, "Failed to generate question")

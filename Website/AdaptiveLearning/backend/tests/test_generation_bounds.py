@@ -326,6 +326,18 @@ def test_a_generator_that_raised_is_counted_as_a_question_not_made(monkeypatch):
                                      ("question", "generation_failed:NoQuestion"): 1}
 
 
+def test_a_provider_failure_stays_a_500_and_is_counted(monkeypatch):
+    """A revoked key must not read as "try again"."""
+    import ops_metrics
+
+    def _bad_key(*_a, **_k):
+        raise RuntimeError("401 invalid x-api-key")
+
+    with pytest.raises(RuntimeError):
+        _generate(monkeypatch, decider=_bad_key)
+    assert ops_metrics.pending() == {("question", "generation_failed:RuntimeError"): 1}
+
+
 def test_a_served_question_is_counted_and_a_ceiling_refusal_is_not_a_failure(monkeypatch):
     import ops_metrics
 
@@ -633,13 +645,12 @@ def test_a_refused_claim_refunds_nothing(budget_db):
 def test_a_decider_that_raises_is_logged_with_its_cause_and_still_fails(monkeypatch, capsys):
     """Before, the app logged nothing: only uvicorn's traceback, if anyone kept that window."""
     def _crash(*_a, **_k):
-        raise ValueError("no solver for this topic")
+        raise RuntimeError("no solver for this topic")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RuntimeError):
         _generate(monkeypatch, decider=_crash)
-    assert exc.value.status_code == 503
     log = capsys.readouterr().out
-    assert "[generate] failed for kid" in log and "ValueError: no solver for this topic" in log, log
+    assert "[generate] failed for kid" in log and "RuntimeError: no solver for this topic" in log, log
 
 
 def test_a_decider_that_returns_nothing_is_logged(monkeypatch, capsys):

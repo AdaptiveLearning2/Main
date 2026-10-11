@@ -609,9 +609,12 @@ def test_a_point_with_no_body_arousal_figure_may_say_often_or_most_of_the_lesson
 
 
 def test_a_line_that_brings_in_body_arousal_is_still_checked():
-    base = "One session was recorded in the last 7 days."
-    line = "One session was recorded in the last 7 days, and body arousal was high most of the lesson."
-    assert main._validated_chart_summary(f"1. {line}", {1.0, 7.0}, 1, [base]) is None
+    # A sensor point, so the sensor-word check passes it and only this rule decides.
+    base = "Average focus is 58%, and it held steady across the weeks."
+    line = "Average focus is 58%, and body arousal stayed high for most of the lesson."
+    assert main._validated_chart_summary(f"1. {line}", {58.0}, 1, [base]) is None
+    plain = "Average focus is 58%, and it stayed steady across the weeks."
+    assert main._validated_chart_summary(f"1. {plain}", {58.0}, 1, [base]) == [plain]
 
 
 def test_the_time_words_bind_only_body_arousal_lines():

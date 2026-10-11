@@ -8,6 +8,7 @@ const POLL_MS = 60_000
 function Counts({ data }) {
   if (!data.retrieved) return <Unread what="Today's session counts" />
   const c = data.counts
+  // Null only while the database function predates practice counts.
   const practiceAnswers = data.practice_answers
   return (
     <div className="space-y-2">
@@ -15,7 +16,7 @@ function Counts({ data }) {
         <Tile label="Lessons started" value={c.started} />
         <Tile label="Open now" value={c.open_now} hint="any day, not ended yet" />
         <Tile label="Answers" value={c.answers + (practiceAnswers ?? 0)}
-              hint={practiceAnswers == null ? 'adaptive only: practice could not be read'
+              hint={practiceAnswers == null ? 'adaptive only: practice is counted once the database is updated'
                 : `${c.answers} adaptive, ${practiceAnswers} practice`} />
         <Tile label="Students active" value={c.active_students} />
       </div>

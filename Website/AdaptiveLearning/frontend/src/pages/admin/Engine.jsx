@@ -102,7 +102,8 @@ export function GenerationSummary() {
         {data => {
           const { ok, failed, served, notServed } = generationTotals(data)
           return (
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            // Five columns only when the ceiling tile is drawn (Claude); Ollama sends none.
+            <div className={`grid grid-cols-2 gap-3 ${data.daily_ceiling ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
               <Tile label="Questions served, 24 h" value={served} />
               <Tile label="Questions not made, 24 h" value={notServed} />
               <Tile label="Model calls ok" value={ok} />

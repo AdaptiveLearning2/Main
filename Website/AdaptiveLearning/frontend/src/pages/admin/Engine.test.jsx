@@ -10,7 +10,7 @@ import {
 } from '../../test/fixtures/opsCounters'
 import { QUALITY_PATH, buildSignalQuality } from '../../test/fixtures/adminTotals'
 import { ADAPTIVE_PATH, buildAdaptive } from '../../test/fixtures/adminAdaptive'
-import AdminEngine, { RefusalSummary } from './Engine'
+import AdminEngine, { GenerationSummary, RefusalSummary } from './Engine'
 
 beforeEach(() => {
   resetApi()
@@ -73,6 +73,23 @@ describe('question generation', () => {
     page()
     await screen.findByText('26')
     expect(screen.queryByText(/Estimated cost/)).not.toBeInTheDocument()
+  })
+})
+
+describe("the Overview's generation card", () => {
+  const grid = async () => (await screen.findByText('Questions served, 24 h')).closest('.grid')
+
+  it('lays five tiles in five columns when the ceiling tile is drawn', async () => {
+    render(<MemoryRouter><GenerationSummary /></MemoryRouter>)
+    expect((await grid()).className).toMatch(/sm:grid-cols-5/)
+  })
+
+  it('leaves no empty column under Ollama, which sends no ceiling', async () => {
+    overrideApi(GENERATION_PATH, () => buildGeneration({ provider: 'ollama', model: null, daily_ceiling: null }))
+    render(<MemoryRouter><GenerationSummary /></MemoryRouter>)
+    const g = await grid()
+    expect(g.className).toMatch(/sm:grid-cols-4/)
+    expect(g.children).toHaveLength(4)
   })
 })
 

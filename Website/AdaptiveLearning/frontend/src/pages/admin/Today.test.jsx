@@ -22,11 +22,11 @@ describe("today's counts", () => {
     expect(apiFetch).toHaveBeenCalledWith(TODAY_PATH)
   })
 
-  it('says the answer count is adaptive only when practice answers could not be read', async () => {
+  it('says the answer count is adaptive only until the database counts practice', async () => {
     overrideApi(TODAY_PATH, () => buildToday({ practice_answers: null }))
     render(<Today />)
     expect(await screen.findByText('214')).toBeInTheDocument()
-    expect(screen.getByText('adaptive only: practice could not be read')).toBeInTheDocument()
+    expect(screen.getByText('adaptive only: practice is counted once the database is updated')).toBeInTheDocument()
   })
 
   it('says teacher and parent activity is not recorded rather than showing a zero', async () => {
